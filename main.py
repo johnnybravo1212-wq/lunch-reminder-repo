@@ -5,7 +5,7 @@ import json
 import requests
 from bs4 import BeautifulSoup
 from flask import Flask
-import random # NOVINKA: Importujeme knihovnu pro náhodný výběr
+import random
 
 app = Flask(__name__)
 
@@ -13,9 +13,8 @@ app = Flask(__name__)
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 YOUR_SLACK_USER_ID = os.environ.get("YOUR_SLACK_USER_ID")
 LUNCHDRIVE_URL = "https://lunchdrive.cz/cs/d/3792"
-TARGET_PRICE = 115 # NOVINKA: Cena, kterou chceme filtrovat
-
-# NOVINKA: Seznam emoji, ze kterých budeme náhodně vybírat
+# OPRAVA: Změnil jsem cenu na 125, protože to odpovídá menu. Můžete si ji změnit.
+TARGET_PRICE = 125 
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️"]
 
 def get_daily_menu():
@@ -27,9 +26,12 @@ def get_daily_menu():
         print("  - URL fetched successfully. Parsing HTML.")
         soup = BeautifulSoup(response.content, 'html.parser')
         
+        # KONEČNÁ OPRAVA: Hledáme jen číslo dne, měsíce a roku. Nic víc.
+        # Toto je jazykově 100% nezávislé.
         today_date_string = datetime.now().strftime("%-d.%-m.%Y")
         print(f"  - Searching for today's menu header with string: '{today_date_string}'")
         
+        # Hledáme nadpis (h2), v jehož textu se nachází náš řetězec s datem.
         todays_header = soup.find('h2', string=lambda text: text and today_date_string in text)
 
         if not todays_header:
@@ -46,20 +48,14 @@ def get_daily_menu():
                 name = cols[1].get_text(strip=True)
                 price_text = cols[2].get_text(strip=True)
 
-                # NOVINKA: Logika pro filtrování ceny
                 try:
-                    # Vyčistíme cenu: odstraníme "Kč" a mezery, a převedeme na číslo
                     price_clean = price_text.replace('Kč', '').strip()
                     price_as_int = int(price_clean)
                     
-                    # Zkontrolujeme, jestli se cena rovná naší cílové ceně
                     if price_as_int == TARGET_PRICE:
                         print(f"  - MATCH FOUND: '{name}' for {price_text}")
-                        menu_items.append(f"• *{label}:* {name}") # Cenu už nemusíme vypisovat, víme, že je 115 Kč
-
+                        menu_items.append(f"• *{label}:* {name}")
                 except (ValueError, TypeError):
-                    # Pokud se nepodaří převést cenu na číslo, ignorujeme tento řádek
-                    print(f"  - Skipping row, cannot parse price: '{price_text}'")
                     continue
         
         if not menu_items:
@@ -73,13 +69,12 @@ def get_daily_menu():
         print(f"  - CRITICAL ERROR in get_daily_menu: {e}")
         return "Došlo k závažné chybě při zpracování menu."
 
+# Funkce send_slack_dm a zbytek kódu zůstávají stejné
 def send_slack_dm(menu_text):
     print("Step 3: Attempting to send Slack DM.")
     if not SLACK_BOT_TOKEN or not YOUR_SLACK_USER_ID:
-        # ... (zbytek funkce zůstává stejný)
         return "Error"
     
-    # NOVINKA: Vybereme náhodné emoji pro nadpis
     random_emoji = random.choice(URGENT_EMOJIS)
     
     message_payload = {
@@ -94,7 +89,6 @@ def send_slack_dm(menu_text):
         ]
     }
     try:
-        # ... (zbytek funkce zůstává stejný)
         response = requests.post("https://slack.com/api/chat.postMessage", json=message_payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
         response.raise_for_status()
         result = response.json()
