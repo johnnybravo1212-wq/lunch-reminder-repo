@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
-from flask import Flask, request, jsonify, render_template, abort, redirect, url_for
+from flask import Flask, request, jsonify, render_template, render_template_string, abort, redirect, url_for
 
 # Imports for Google Cloud Firestore and Firebase Admin SDK
 import firebase_admin
@@ -168,6 +168,9 @@ def build_reminder_message_blocks(menu_items):
     # Format menu items for display
     menu_text = "\n".join([f"• {item}" for item in menu_items])
     
+    # NEW: The link now points to our new /open-lunchdrive endpoint
+    open_app_url = f"{BASE_URL}/open-lunchdrive"
+
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"{random_emoji} PepeEats: Objednej oběd NA ZÍTRA! {random_emoji}", "emoji": True}},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*Zítřejší nabídka za {TARGET_PRICE} Kč:*"}},
@@ -175,6 +178,11 @@ def build_reminder_message_blocks(menu_items):
         {"type": "section", "text": {"type": "mrkdwn", "text": menu_text}},
         {"type": "image", "image_url": random.choice(PEPE_IMAGES), "alt_text": "A wild Pepe appears"},
         {"type": "divider"},
+        {
+            "type": "section",
+            # THIS IS THE KEY CHANGE - The link now points to our smart redirector
+            "text": {"type": "mrkdwn", "text": f"Klikněte zde pro objednání: <{open_app_url}|*Otevřít LunchDrive*>"}
+        },
         {
             "type": "actions",
             "elements": [
@@ -219,10 +227,83 @@ def health_check():
     """A simple endpoint to confirm the server is running."""
     return "PepeEats is alive!", 200
 
+# NEW ENDPOINT BASED ON CHATGPT PROMPT
+@app.route("/open-lunchdrive")
+def open_lunchdrive():
+    # Configuration for the redirect logic
+    fallback_play = "https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en"
+    # Found the correct iOS App Store URL and ID
+    fallback_ios = "https://apps.apple.com/cz/app/lunchdrive/id1496245341"
+    package = "cz.trueapps.lunchdrive"
+    ua = request.headers.get("User-Agent", "")
+    
+    # Logging for debugging purposes
+    app.logger.info("open-lunchdrive hit - UA: %s, IP: %s", ua, request.remote_addr)
+
+    # The HTML page with embedded JavaScript to handle the redirection logic
+    html = """
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf-8">
+  <title>Otevřít LunchDrive…</title>
+  <style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,Cantarell,'Open Sans','Helvetica Neue',sans-serif;margin:1rem;text-align:center;padding-top:2rem;} a{color:#007aff;}</style>
+  <script>
+    (function(){
+      var ua = navigator.userAgent || "";
+      var isAndroid = /android/i.test(ua);
+      var isIOS = /iphone|ipad|ipod/i.test(ua);
+      var now = Date.now();
+      var fallbackPlay = "{{ fallback_play }}";
+      var fallbackIOS = "{{ fallback_ios }}";
+      var packageName = "{{ package }}";
+      var schemeUrl = "lunchdrive://open";
+      var intentUrl = "intent://#Intent;package=" + packageName + ";S.browser_fallback_url=" + encodeURIComponent(fallbackPlay) + ";end";
+
+      function openWithLocation(url){ try { window.location.href = url; } catch(e) {} }
+
+      if (isAndroid) {
+        // Android: First, try the custom scheme via an iframe (subtle method)
+        var iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        document.body.appendChild(iframe);
+        try { iframe.src = schemeUrl; } catch(e){}
+        
+        // After a short delay, try the more powerful Intent URL
+        setTimeout(function(){ openWithLocation(intentUrl); }, 700);
+
+        // If after a longer delay we are still on this page, the app didn't open, so redirect to Play Store
+        setTimeout(function(){ if (Date.now() - now < 3500) { openWithLocation(fallbackPlay); } }, 2400);
+
+      } else if (isIOS) {
+        // iOS: Try the custom scheme directly
+        openWithLocation(schemeUrl);
+        // If after a delay we are still here, redirect to the App Store
+        setTimeout(function(){ if (Date.now() - now < 2500) { openWithLocation(fallbackIOS); } }, 2000);
+      } else {
+        // Desktop or other OS: Go straight to the Play Store link
+        openWithLocation(fallbackPlay);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <h3>Otevírám aplikaci LunchDrive…</h3>
+  <p>Pokud se nic nestane, <a href="{{ fallback_play }}">klikněte zde pro přechod do obchodu</a>.</p>
+  <p style="font-size:0.8em;color:#888;">User-Agent: <code>{{ ua }}</code></p>
+</body>
+</html>
+"""
+    return render_template_string(html,
+                                  fallback_play=fallback_play,
+                                  fallback_ios=fallback_ios,
+                                  package=package,
+                                  ua=ua)
+
 @app.before_request
 def verify_slack_request():
     """Verify that incoming requests from Slack are authentic."""
-    # This verification is only for the interactive endpoint
     if request.path == '/slack/interactive':
         verifier = SignatureVerifier(SLACK_SIGNING_SECRET)
         if not verifier.is_valid_request(request.get_data(), request.headers):
@@ -231,19 +312,15 @@ def verify_slack_request():
 
 @app.route('/send-daily-reminder', methods=['POST'])
 def trigger_daily_reminder():
-    """
-    Endpoint triggered by Cloud Scheduler to send the daily lunch menu.
-    """
+    """Endpoint triggered by Cloud Scheduler to send the daily lunch menu."""
     print("--- Daily Reminder Job Started ---")
-    
-    # Run only on Sunday (for Mon) to Thursday (for Fri)
     if datetime.now().weekday() not in [0, 1, 2, 3, 6]:
         print("Not a reminder day (Friday/Saturday). Job ending.")
         return ("Not a reminder day.", 200)
 
     menu_items = get_daily_menu()
     
-    if isinstance(menu_items, str): # It's an error message
+    if isinstance(menu_items, str):
         print(f"Could not get menu: {menu_items}")
         return (menu_items, 200)
     
@@ -257,14 +334,12 @@ def trigger_daily_reminder():
     users_reminded = 0
 
     for user_id in subscribed_users:
-        # Check if the user has already ordered for tomorrow before sending.
         if not check_if_user_ordered_for_date(user_id, tomorrow):
             print(f"Sending reminder to {user_id}")
             payload = {"channel": user_id, "blocks": message_blocks}
             send_slack_message(payload)
             users_reminded += 1
         else:
-            # If they have ordered, print a log message and skip them.
             print(f"Skipping user {user_id}, they have already ordered for tomorrow.")
             
     print(f"--- Reminders sent to {users_reminded} users. Job finished. ---")
@@ -272,14 +347,10 @@ def trigger_daily_reminder():
 
 @app.route('/send-morning-reminder', methods=['POST'])
 def trigger_morning_reminder():
-    """
-    Endpoint triggered by Cloud Scheduler to remind users what they ordered.
-    """
+    """Endpoint triggered by Cloud Scheduler to remind users what they ordered."""
     print("--- Morning Reminder Job Started ---")
     today = datetime.now()
-    
-    # Run only on workdays
-    if today.weekday() in [5, 6]: # Saturday or Sunday
+    if today.weekday() in [5, 6]:
         print("Not a workday. Job ending.")
         return ("Not a workday.", 200)
 
@@ -302,66 +373,43 @@ def trigger_morning_reminder():
 
 @app.route('/slack/interactive', methods=['POST'])
 def slack_interactive_endpoint():
-    """
-    Handles all interactive components from Slack (button clicks, modal submits).
-    """
+    """Handles all interactive components from Slack (button clicks, modal submits)."""
     payload = json.loads(request.form.get("payload"))
     user_id = payload["user"]["id"]
     
-    # Case 1: User submitted the meal selection modal
     if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "order_submission":
         print(f"Received modal submission from {user_id}")
-        
-        # Extract the selected meal
         submitted_values = payload["view"]["state"]["values"]
         meal_block = submitted_values["meal_selection_block"]
         action = meal_block["meal_selection_action"]
         selected_meal = action["selected_option"]["value"]
-        
-        # Save to database
         tomorrow = datetime.now() + timedelta(days=1)
         save_user_order(user_id, selected_meal, tomorrow)
-        
-        # Send a confirmation DM
         confirmation_text = f"Díky! Uložil jsem, že na zítra máš objednáno: *{selected_meal}*"
         send_slack_message({"channel": user_id, "text": confirmation_text})
-        
-        return ("", 200) # Acknowledge the request
+        return ("", 200)
 
-    # Case 2: User clicked a button in the original message
     if payload["type"] == "block_actions":
         action = payload["actions"][0]
         action_id = action.get("action_id")
         
-        # User clicked the "I've Ordered" button
         if action_id == "open_order_modal":
             print(f"User {user_id} clicked 'I've Ordered'. Opening modal.")
             trigger_id = payload["trigger_id"]
-            
-            # We need to fetch the menu again to populate the modal
             menu_items = get_daily_menu()
             if isinstance(menu_items, str):
                 send_slack_message({"channel": user_id, "text": "Omlouvám se, nepodařilo se mi znovu načíst menu pro výběr."})
                 return ("", 200)
             
             modal_view = build_order_modal_view(menu_items)
-            
-            requests.post(
-                "https://slack.com/api/views.open",
-                json={"trigger_id": trigger_id, "view": modal_view},
-                headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
-            )
+            requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": modal_view}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
             return ("", 200)
             
-        # User clicked the "Unsubscribe" button
         elif action_id == "unsubscribe":
             print(f"User {user_id} clicked 'Unsubscribe'.")
             remove_user(user_id)
-            
-            # Send confirmation message
             confirmation_text = "Je mi to líto, ale zrušil jsem ti odběr. Kdyby sis to rozmyslel, stačí se znovu přihlásit. 🐸"
             send_slack_message({"channel": user_id, "text": confirmation_text})
-            
             return ("", 200)
             
     return ("Unhandled interaction", 200)
@@ -369,12 +417,7 @@ def slack_interactive_endpoint():
 @app.route('/subscribe', methods=['GET'])
 def subscribe():
     """Renders the subscription page with the 'Add to Slack' button."""
-    # Construct the Slack OAuth URL
-    params = {
-        'client_id': SLACK_CLIENT_ID,
-        'scope': 'chat:write,users:read', # Scopes needed by the app
-        'redirect_uri': f"{BASE_URL}/slack/oauth/callback"
-    }
+    params = {'client_id': SLACK_CLIENT_ID, 'scope': 'chat:write,users:read', 'redirect_uri': f"{BASE_URL}/slack/oauth/callback"}
     slack_auth_url = f"https://slack.com/oauth/v2/authorize?{urlencode(params)}"
     return render_template('subscribe.html', slack_auth_url=slack_auth_url)
 
@@ -384,29 +427,17 @@ def oauth_callback():
     code = request.args.get('code')
     if not code:
         return ("OAuth failed: No code provided.", 400)
-        
-    # Exchange the temporary code for an access token
-    response = requests.post("https://slack.com/api/oauth.v2.access", data={
-        'client_id': SLACK_CLIENT_ID,
-        'client_secret': SLACK_CLIENT_SECRET,
-        'code': code,
-        'redirect_uri': f"{BASE_URL}/slack/oauth/callback"
-    })
-    
+    response = requests.post("https://slack.com/api/oauth.v2.access", data={'client_id': SLACK_CLIENT_ID, 'client_secret': SLACK_CLIENT_SECRET, 'code': code, 'redirect_uri': f"{BASE_URL}/slack/oauth/callback"})
     data = response.json()
     if not data.get('ok'):
         return (f"OAuth Error: {data.get('error')}", 400)
 
-    # The response contains authed_user.id
     user_id = data.get('authed_user', {}).get('id')
     if user_id:
         print(f"New user subscribed: {user_id}")
         add_user(user_id)
-        
-        # Send a welcome message
         welcome_text = "Vítej v PepeEats! 🎉 Od teď ti budu posílat denní připomínky na oběd."
         send_slack_message({"channel": user_id, "text": welcome_text})
-        
         return "<h1>Success!</h1><p>You have been subscribed to PepeEats. You can close this window now.</p>"
     
     return ("OAuth failed: Could not get user ID.", 500)
@@ -414,34 +445,22 @@ def oauth_callback():
 @app.route('/admin', methods=['GET'])
 def admin_panel():
     """Displays the admin dashboard with subscribers and today's orders."""
-    # Simple password protection
     secret = request.args.get('secret')
     if secret != ADMIN_SECRET_KEY:
         abort(403) # Forbidden
-
-    # Fetch data for the template
     users_docs = db.collection('users').stream()
     users_list = [{'id': doc.id} for doc in users_docs]
-    
     today = datetime.now()
     orders_list = get_orders_for_date(today)
-    
     return render_template('admin.html', users=users_list, orders=orders_list, today_str=today.strftime('%Y-%m-%d'))
 
-
 if __name__ == "__main__":
-    # This block is for local development only.
-    # It allows you to run the app with `python main.py`.
-    # It uses python-dotenv to load the .env file.
     from dotenv import load_dotenv
     load_dotenv()
-    
-    # Reload environment variables after loading .env
     SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
     SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
     SLACK_CLIENT_ID = os.environ.get("SLACK_CLIENT_ID")
     SLACK_CLIENT_SECRET = os.environ.get("SLACK_CLIENT_SECRET")
     BASE_URL = os.environ.get("BASE_URL")
     ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
-
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
