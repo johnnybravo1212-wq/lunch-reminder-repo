@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PepeEats Admin</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #f8f8f8;
+            color: #333;
+            margin: 0;
+            padding: 2em;
+        }
+        h1, h2 {
+            color: #1d1c1d;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background-color: #fff;
+            padding: 2em;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 1.5em;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+            font-weight: 600;
+        }
+        tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        .no-data {
+            font-style: italic;
+            color: #777;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🐸 PepeEats Admin Panel</h1>
+        
+        <h2>Subscribed Users (Total: {{ users|length }})</h2>
+        {% if users %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Slack User ID</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for user in users %}
+                        <tr>
+                            <td>{{ user.id }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p class="no-data">No users have subscribed yet.</p>
+        {% endif %}
+
+        <h2>Today's Lunch Orders ({{ today_str }})</h2>
+        {% if orders %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Slack User ID</th>
+                        <th>Meal Choice</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for order in orders %}
+                        <tr>
+                            <td>{{ order.slack_user_id }}</td>
+                            <td>{{ order.meal_description }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% else %}
+            <p class="no-data">No orders have been placed for today.</p>
+        {% endif %}
+    </div>
+</body>
+</html>
