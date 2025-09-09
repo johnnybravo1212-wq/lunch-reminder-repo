@@ -18,3 +18,6 @@ gunicorn==22.0.0
 
 # A library to easily handle environment variables from a .env file for local development
 python-dotenv==1.0.1
+
+# Slack SDK for request signature verification
+slack-sdk==3.27.0
