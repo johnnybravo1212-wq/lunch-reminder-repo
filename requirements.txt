@@ -1,4 +1,20 @@
-requests
-beautifulsoup4
-Flask
-gunicorn
+# Flask is our web framework
+Flask==3.0.3
+
+# Used for making HTTP requests to LunchDrive and the Slack API
+requests==2.31.0
+
+# Used for parsing the HTML from the LunchDrive menu page
+beautifulsoup4==4.12.3
+
+# The official Google Cloud Firestore library for database interactions
+google-cloud-firestore==2.16.0
+
+# The Firebase Admin SDK, used for initializing our connection to Firestore
+firebase-admin==6.5.0
+
+# Gunicorn is a production-ready web server to run our Flask app
+gunicorn==22.0.0
+
+# A library to easily handle environment variables from a .env file for local development
+python-dotenv==1.0.1
