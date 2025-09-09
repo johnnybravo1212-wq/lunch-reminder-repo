@@ -22,7 +22,6 @@ app = Flask(__name__)
 
 # Initialize Firebase Admin SDK
 # On Google Cloud Run, the SDK automatically finds the project credentials.
-# For local testing, you'd need a service account JSON file.
 try:
     firebase_admin.initialize_app()
 except Exception as e:
@@ -83,6 +82,15 @@ def get_orders_for_date(target_date):
     orders_ref = db.collection('orders')
     query = orders_ref.where('order_for_date', '==', target_date.strftime("%Y-%m-%d"))
     return [doc.to_dict() for doc in query.stream()]
+
+def check_if_user_ordered_for_date(user_id, target_date):
+    """
+    Checks if a specific user has already placed an order for a given date.
+    Returns True if an order exists, False otherwise.
+    """
+    doc_id = f"{user_id}_{target_date.strftime('%Y-%m-%d')}"
+    order_doc = db.collection('orders').document(doc_id).get()
+    return order_doc.exists
 
 # --- MENU SCRAPING LOGIC ---
 
@@ -206,6 +214,11 @@ def build_order_modal_view(menu_items):
 
 # --- FLASK ROUTES (ENDPOINTS) ---
 
+@app.route('/')
+def health_check():
+    """A simple endpoint to confirm the server is running."""
+    return "PepeEats is alive!", 200
+
 @app.before_request
 def verify_slack_request():
     """Verify that incoming requests from Slack are authentic."""
@@ -232,7 +245,6 @@ def trigger_daily_reminder():
     
     if isinstance(menu_items, str): # It's an error message
         print(f"Could not get menu: {menu_items}")
-        # Optionally, send an error to an admin here
         return (menu_items, 200)
     
     subscribed_users = get_all_subscribed_users()
@@ -241,13 +253,21 @@ def trigger_daily_reminder():
         return ("No users.", 200)
 
     message_blocks = build_reminder_message_blocks(menu_items)
-    
+    tomorrow = datetime.now() + timedelta(days=1)
+    users_reminded = 0
+
     for user_id in subscribed_users:
-        print(f"Sending reminder to {user_id}")
-        payload = {"channel": user_id, "blocks": message_blocks}
-        send_slack_message(payload)
-        
-    print(f"--- Reminders sent to {len(subscribed_users)} users. Job finished. ---")
+        # Check if the user has already ordered for tomorrow before sending.
+        if not check_if_user_ordered_for_date(user_id, tomorrow):
+            print(f"Sending reminder to {user_id}")
+            payload = {"channel": user_id, "blocks": message_blocks}
+            send_slack_message(payload)
+            users_reminded += 1
+        else:
+            # If they have ordered, print a log message and skip them.
+            print(f"Skipping user {user_id}, they have already ordered for tomorrow.")
+            
+    print(f"--- Reminders sent to {users_reminded} users. Job finished. ---")
     return ("Reminders sent.", 200)
 
 @app.route('/send-morning-reminder', methods=['POST'])
@@ -411,7 +431,7 @@ def admin_panel():
 
 if __name__ == "__main__":
     # This block is for local development only.
-    # It allows you to run the app with `python app.py`.
+    # It allows you to run the app with `python main.py`.
     # It uses python-dotenv to load the .env file.
     from dotenv import load_dotenv
     load_dotenv()
