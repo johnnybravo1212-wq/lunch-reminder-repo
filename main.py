@@ -3,7 +3,7 @@ import json
 import requests
 import random
 import logging
-import re # NEW: Import the regular expression module
+import re # Import the regular expression module
 from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
 
@@ -106,7 +106,8 @@ def get_daily_menu(target_date):
     try:
         response = requests.get(LUNCHDRIVE_URL, timeout=15)
         response.raise_for_status()
-        soup = BeautifulSoup(response.content, 'html.parser')
+        # Use the robust 'lxml' parser
+        soup = BeautifulSoup(response.content, 'lxml')
         target_date_string = target_date.strftime("%-d.%-m.%Y")
         app.logger.info(f"Searching for menu header with date: '{target_date_string}'")
         menu_header = soup.find('h2', string=lambda text: text and target_date_string in text)
@@ -119,12 +120,12 @@ def get_daily_menu(target_date):
             return "Chyba: Tabulka s menu nebyla nalezena."
         for row in menu_table.find_all('tr'):
             cols = row.find_all('td')
-            if len(cols) == 3:
-                name = cols[1].get_text(strip=True)
-                price_text = cols[2].get_text(strip=True)
+            # THE FINAL FIX: Check for 4 columns
+            if len(cols) == 4:
+                # THE FINAL FIX: Use correct indices
+                name = cols[2].get_text(strip=True)
+                price_text = cols[3].get_text(strip=True)
                 
-                # THIS IS THE NEW, ROBUST FIX
-                # Instead of cleaning the string, we find the first sequence of digits.
                 match = re.search(r'\d+', price_text)
                 if match:
                     try:
@@ -132,8 +133,7 @@ def get_daily_menu(target_date):
                         if price_as_int == TARGET_PRICE:
                             menu_items.append(name)
                     except (ValueError, TypeError):
-                        continue # Should not happen with regex, but safe to keep
-
+                        continue
         if not menu_items:
             app.logger.warning(f"No meals found for target price {TARGET_PRICE} Kč on {target_date_string}")
             return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
