@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import random
-import logging # NEW: Import the logging module
+import logging
 from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
 
@@ -21,11 +21,10 @@ from slack_sdk.signature import SignatureVerifier
 # Initialize Flask App
 app = Flask(__name__)
 
-# NEW: Set up proper logging
+# Set up proper logging
 app.logger.setLevel(logging.INFO)
 
 # Initialize Firebase Admin SDK
-# On Google Cloud Run, the SDK automatically finds the project credentials.
 try:
     firebase_admin.initialize_app()
     app.logger.info("Firebase Admin SDK initialized successfully.")
@@ -36,7 +35,6 @@ except Exception as e:
 db = firestore.client()
 
 # --- CONFIGURATION ---
-# Load configuration from environment variables
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 SLACK_CLIENT_ID = os.environ.get("SLACK_CLIENT_ID")
@@ -123,6 +121,8 @@ def get_daily_menu(target_date):
             if len(cols) == 3:
                 name = cols[1].get_text(strip=True)
                 price_text = cols[2].get_text(strip=True)
+                # THIS IS THE FIX: Replace non-breaking space with a regular space
+                price_text = price_text.replace('\xa0', ' ')
                 try:
                     price_clean = price_text.replace('Kč', '').strip()
                     price_as_int = int(price_clean)
@@ -131,6 +131,8 @@ def get_daily_menu(target_date):
                 except (ValueError, TypeError):
                     continue
         if not menu_items:
+            # This log will now correctly fire only if there are TRULY no meals for the price
+            app.logger.warning(f"No meals found for target price {TARGET_PRICE} Kč on {target_date_string}")
             return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
         return menu_items
     except Exception as e:
@@ -138,7 +140,7 @@ def get_daily_menu(target_date):
         return "Došlo k závažné chybě při stahování menu."
 
 # --- SLACK API & MESSAGE BUILDING ---
-
+# ... (the rest of the file is unchanged) ...
 def send_slack_message(payload):
     """Generic function to send a message to the Slack API."""
     try:
@@ -270,38 +272,28 @@ def verify_slack_request():
 @app.route('/send-daily-reminder', methods=['POST'])
 def trigger_daily_reminder():
     """Endpoint triggered by Cloud Scheduler to send the daily lunch menu."""
-    # THIS IS THE MOST IMPORTANT LOG - IT WILL BE RED
     app.logger.error("!!! KONTROLNÍ LOG: Funkce trigger_daily_reminder SPUŠTĚNA !!!")
-
     today = date.today()
     if today.weekday() not in [0, 1, 2, 3, 6]:
         app.logger.info(f"Not a reminder day (Today is weekday {today.weekday()}). Job ending.")
         return ("Not a reminder day.", 200)
-
     if today.weekday() == 3: # Thursday
         next_day = today + timedelta(days=1)
     else: # Sunday, Monday, Tuesday, Wednesday
         next_day = today + timedelta(days=1)
-    
     if today.weekday() == 6: # Sunday
         next_day = today + timedelta(days=1)
-
     app.logger.info(f"Today is {today.strftime('%Y-%m-%d')}. Checking for menu and orders for {next_day.strftime('%Y-%m-%d')}.")
-
     menu_items = get_daily_menu(next_day)
-    
     if isinstance(menu_items, str):
         app.logger.warning(f"Could not get menu: {menu_items}")
         return (menu_items, 200)
-    
     subscribed_users = get_all_subscribed_users()
     if not subscribed_users:
         app.logger.info("No subscribed users to notify.")
         return ("No users.", 200)
-
     message_blocks = build_reminder_message_blocks(menu_items)
     users_reminded = 0
-
     for user_id in subscribed_users:
         if not check_if_user_ordered_for_date(user_id, next_day):
             app.logger.info(f"Sending reminder to {user_id} for {next_day.strftime('%Y-%m-%d')}")
@@ -310,7 +302,6 @@ def trigger_daily_reminder():
             users_reminded += 1
         else:
             app.logger.info(f"Skipping user {user_id}, they have already ordered for {next_day.strftime('%Y-%m-%d')}.")
-            
     app.logger.info(f"--- Reminders sent to {users_reminded} users. Job finished. ---")
     return ("Reminders sent.", 200)
 
