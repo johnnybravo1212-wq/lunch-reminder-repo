@@ -21,3 +21,7 @@ python-dotenv==1.0.1
 
 # Slack SDK for request signature verification
 slack-sdk==3.27.0
+
+# A robust HTML and XML parser
+lxml==5.2.2
+
