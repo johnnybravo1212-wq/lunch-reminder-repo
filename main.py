@@ -2,7 +2,7 @@ import os
 import json
 import requests
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
@@ -71,7 +71,7 @@ def save_user_order(user_id, meal_choice, order_for_date):
         'slack_user_id': user_id,
         'meal_description': meal_choice,
         'order_for_date': order_for_date.strftime("%Y-%m-%d"),
-        'placed_on_date': datetime.now().strftime("%Y-%m-%d")
+        'placed_on_date': date.today().strftime("%Y-%m-%d")
     }
     # Using user_id and date as a unique document ID to prevent duplicate orders
     doc_id = f"{user_id}_{order_for_date.strftime('%Y-%m-%d')}"
@@ -94,28 +94,27 @@ def check_if_user_ordered_for_date(user_id, target_date):
 
 # --- MENU SCRAPING LOGIC ---
 
-def get_daily_menu():
+def get_daily_menu(target_date):
     """
-    Fetches and parses the menu for the *next* day from LunchDrive.
+    Fetches and parses the menu for a *specific* day from LunchDrive.
     Returns a list of menu items or an error string.
     """
-    print("Attempting to get tomorrow's menu.")
+    print(f"Attempting to get menu for date: {target_date.strftime('%Y-%m-%d')}.")
     try:
         response = requests.get(LUNCHDRIVE_URL, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        tomorrow = datetime.now() + timedelta(days=1)
-        target_date_string = tomorrow.strftime("%-d.%-m.%Y")
+        target_date_string = target_date.strftime("%-d.%-m.%Y")
         
         print(f"Searching for menu header with date: '{target_date_string}'")
-        todays_header = soup.find('h2', string=lambda text: text and target_date_string in text)
+        menu_header = soup.find('h2', string=lambda text: text and target_date_string in text)
 
-        if not todays_header:
-            print("CRITICAL: Tomorrow's menu header was NOT found.")
-            return "Menu na zítra ještě není k dispozici. 🙁"
+        if not menu_header:
+            print(f"CRITICAL: Menu header for {target_date_string} was NOT found.")
+            return f"Menu na {target_date.strftime('%d.%m.')} ještě není k dispozici. 🙁"
 
-        menu_table = todays_header.find_next_sibling('table', class_='table-menu')
+        menu_table = menu_header.find_next_sibling('table', class_='table-menu')
         menu_items = []
         if not menu_table:
             return "Chyba: Tabulka s menu nebyla nalezena."
@@ -134,7 +133,7 @@ def get_daily_menu():
                     continue
         
         if not menu_items:
-            return f"Na zítra bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
+            return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
             
         return menu_items
 
@@ -164,11 +163,7 @@ def send_slack_message(payload):
 def build_reminder_message_blocks(menu_items):
     """Builds the Slack Block Kit structure for the daily reminder."""
     random_emoji = random.choice(URGENT_EMOJIS)
-    
-    # Format menu items for display
     menu_text = "\n".join([f"• {item}" for item in menu_items])
-    
-    # NEW: The link now points to our new /open-lunchdrive endpoint
     open_app_url = f"{BASE_URL}/open-lunchdrive"
 
     blocks = [
@@ -178,44 +173,23 @@ def build_reminder_message_blocks(menu_items):
         {"type": "section", "text": {"type": "mrkdwn", "text": menu_text}},
         {"type": "image", "image_url": random.choice(PEPE_IMAGES), "alt_text": "A wild Pepe appears"},
         {"type": "divider"},
-        {
-            "type": "section",
-            # THIS IS THE KEY CHANGE - The link now points to our smart redirector
-            "text": {"type": "mrkdwn", "text": f"Klikněte zde pro objednání: <{open_app_url}|*Otevřít LunchDrive*>"}
-        },
-        {
-            "type": "actions",
-            "elements": [
-                {"type": "button", "text": {"type": "plain_text", "text": "✅ Mám objednáno", "emoji": True}, "style": "primary", "action_id": "open_order_modal"},
-                {"type": "button", "text": {"type": "plain_text", "text": "Zrušit odběr", "emoji": True}, "style": "danger", "action_id": "unsubscribe", "value": "unsubscribe_clicked"}
-            ]
-        }
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"Klikněte zde pro objednání: <{open_app_url}|*Otevřít LunchDrive*>"}},
+        {"type": "actions", "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "✅ Mám objednáno", "emoji": True}, "style": "primary", "action_id": "open_order_modal"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Zrušit odběr", "emoji": True}, "style": "danger", "action_id": "unsubscribe", "value": "unsubscribe_clicked"}
+        ]}
     ]
     return blocks
 
 def build_order_modal_view(menu_items):
     """Builds the Slack modal for selecting a meal."""
     options = [{"text": {"type": "plain_text", "text": item, "emoji": True}, "value": item} for item in menu_items]
-    
     view = {
-        "type": "modal",
-        "callback_id": "order_submission",
-        "title": {"type": "plain_text", "text": "PepeEats", "emoji": True},
-        "submit": {"type": "plain_text", "text": "Uložit", "emoji": True},
-        "close": {"type": "plain_text", "text": "Zrušit", "emoji": True},
+        "type": "modal", "callback_id": "order_submission", "title": {"type": "plain_text", "text": "PepeEats", "emoji": True},
+        "submit": {"type": "plain_text", "text": "Uložit", "emoji": True}, "close": {"type": "plain_text", "text": "Zrušit", "emoji": True},
         "blocks": [
             {"type": "section", "text": {"type": "mrkdwn", "text": "Super! Co sis dnes objednal/a?"}},
-            {
-                "type": "input",
-                "block_id": "meal_selection_block",
-                "element": {
-                    "type": "static_select",
-                    "placeholder": {"type": "plain_text", "text": "Vyber jídlo", "emoji": True},
-                    "options": options,
-                    "action_id": "meal_selection_action"
-                },
-                "label": {"type": "plain_text", "text": "Tvoje volba", "emoji": True}
-            }
+            {"type": "input", "block_id": "meal_selection_block", "element": {"type": "static_select", "placeholder": {"type": "plain_text", "text": "Vyber jídlo", "emoji": True}, "options": options, "action_id": "meal_selection_action"}, "label": {"type": "plain_text", "text": "Tvoje volba", "emoji": True}}
         ]
     }
     return view
@@ -227,20 +201,13 @@ def health_check():
     """A simple endpoint to confirm the server is running."""
     return "PepeEats is alive!", 200
 
-# NEW ENDPOINT BASED ON CHATGPT PROMPT
 @app.route("/open-lunchdrive")
 def open_lunchdrive():
-    # Configuration for the redirect logic
     fallback_play = "https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en"
-    # Found the correct iOS App Store URL and ID
     fallback_ios = "https://apps.apple.com/cz/app/lunchdrive/id1496245341"
     package = "cz.trueapps.lunchdrive"
     ua = request.headers.get("User-Agent", "")
-    
-    # Logging for debugging purposes
     app.logger.info("open-lunchdrive hit - UA: %s, IP: %s", ua, request.remote_addr)
-
-    # The HTML page with embedded JavaScript to handle the redirection logic
     html = """
 <!doctype html>
 <html>
@@ -248,7 +215,14 @@ def open_lunchdrive():
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta charset="utf-8">
   <title>Otevřít LunchDrive…</title>
-  <style>body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,Cantarell,'Open Sans','Helvetica Neue',sans-serif;margin:1rem;text-align:center;padding-top:2rem;} a{color:#007aff;}</style>
+  <style>
+    body{font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Oxygen,Ubuntu,Cantarell,'Open Sans','Helvetica Neue',sans-serif;margin:0;padding:1.5rem;text-align:center;background-color:#f5f5f5;}
+    .container{max-width:400px;margin:2rem auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);}
+    h3{font-size:1.5rem;margin-top:0;}
+    p{color:#555;}
+    .button{display:inline-block;padding:0.8rem 1.5rem;margin-top:1rem;background-color:#007aff;color:white;text-decoration:none;border-radius:8px;font-weight:600;}
+    .note{font-size:0.9em;color:#888;margin-top:2rem;}
+  </style>
   <script>
     (function(){
       var ua = navigator.userAgent || "";
@@ -260,46 +234,34 @@ def open_lunchdrive():
       var packageName = "{{ package }}";
       var schemeUrl = "lunchdrive://open";
       var intentUrl = "intent://#Intent;package=" + packageName + ";S.browser_fallback_url=" + encodeURIComponent(fallbackPlay) + ";end";
-
       function openWithLocation(url){ try { window.location.href = url; } catch(e) {} }
-
       if (isAndroid) {
-        // Android: First, try the custom scheme via an iframe (subtle method)
         var iframe = document.createElement('iframe');
         iframe.style.display = 'none';
         document.body.appendChild(iframe);
         try { iframe.src = schemeUrl; } catch(e){}
-        
-        // After a short delay, try the more powerful Intent URL
         setTimeout(function(){ openWithLocation(intentUrl); }, 700);
-
-        // If after a longer delay we are still on this page, the app didn't open, so redirect to Play Store
         setTimeout(function(){ if (Date.now() - now < 3500) { openWithLocation(fallbackPlay); } }, 2400);
-
       } else if (isIOS) {
-        // iOS: Try the custom scheme directly
         openWithLocation(schemeUrl);
-        // If after a delay we are still here, redirect to the App Store
         setTimeout(function(){ if (Date.now() - now < 2500) { openWithLocation(fallbackIOS); } }, 2000);
       } else {
-        // Desktop or other OS: Go straight to the Play Store link
         openWithLocation(fallbackPlay);
       }
     })();
   </script>
 </head>
 <body>
-  <h3>Otevírám aplikaci LunchDrive…</h3>
-  <p>Pokud se nic nestane, <a href="{{ fallback_play }}">klikněte zde pro přechod do obchodu</a>.</p>
-  <p style="font-size:0.8em;color:#888;">User-Agent: <code>{{ ua }}</code></p>
+  <div class="container">
+    <h3>Pokouším se otevřít aplikaci LunchDrive…</h3>
+    <p>Pokud se aplikace neotevřela automaticky, pravděpodobně to blokuje interní prohlížeč Slacku.</p>
+    <a href="{{ fallback_play }}" class="button">Otevřít manuálně v obchodě</a>
+    <p class="note"><b>Tip:</b> Pro nejlepší funkčnost klikněte na tři tečky (⋮) vpravo nahoře a zvolte "Otevřít v systémovém prohlížeči".</p>
+  </div>
 </body>
 </html>
 """
-    return render_template_string(html,
-                                  fallback_play=fallback_play,
-                                  fallback_ios=fallback_ios,
-                                  package=package,
-                                  ua=ua)
+    return render_template_string(html, fallback_play=fallback_play, fallback_ios=fallback_ios, package=package, ua=ua)
 
 @app.before_request
 def verify_slack_request():
@@ -314,11 +276,25 @@ def verify_slack_request():
 def trigger_daily_reminder():
     """Endpoint triggered by Cloud Scheduler to send the daily lunch menu."""
     print("--- Daily Reminder Job Started ---")
-    if datetime.now().weekday() not in [0, 1, 2, 3, 6]:
-        print("Not a reminder day (Friday/Saturday). Job ending.")
+    today = date.today()
+    if today.weekday() not in [0, 1, 2, 3, 6]:
+        print(f"Not a reminder day (Friday/Saturday). Job ending.")
         return ("Not a reminder day.", 200)
 
-    menu_items = get_daily_menu()
+    # CORRECTED LOGIC: Calculate the date for the next workday explicitly.
+    # If today is Thursday, tomorrow is Friday. If Sunday, tomorrow is Monday.
+    if today.weekday() == 3: # Thursday
+        next_day = today + timedelta(days=1)
+    else: # Sunday, Monday, Tuesday, Wednesday
+        next_day = today + timedelta(days=1)
+    
+    # Special case for Sunday -> Monday
+    if today.weekday() == 6: # Sunday
+        next_day = today + timedelta(days=1)
+
+    print(f"Today is {today.strftime('%Y-%m-%d')}. Checking for menu and orders for {next_day.strftime('%Y-%m-%d')}.")
+
+    menu_items = get_daily_menu(next_day)
     
     if isinstance(menu_items, str):
         print(f"Could not get menu: {menu_items}")
@@ -330,17 +306,17 @@ def trigger_daily_reminder():
         return ("No users.", 200)
 
     message_blocks = build_reminder_message_blocks(menu_items)
-    tomorrow = datetime.now() + timedelta(days=1)
     users_reminded = 0
 
     for user_id in subscribed_users:
-        if not check_if_user_ordered_for_date(user_id, tomorrow):
-            print(f"Sending reminder to {user_id}")
+        # CORRECTED LOGIC: Check if the user has already ordered for the specific next day.
+        if not check_if_user_ordered_for_date(user_id, next_day):
+            print(f"Sending reminder to {user_id} for {next_day.strftime('%Y-%m-%d')}")
             payload = {"channel": user_id, "blocks": message_blocks}
             send_slack_message(payload)
             users_reminded += 1
         else:
-            print(f"Skipping user {user_id}, they have already ordered for tomorrow.")
+            print(f"Skipping user {user_id}, they have already ordered for {next_day.strftime('%Y-%m-%d')}.")
             
     print(f"--- Reminders sent to {users_reminded} users. Job finished. ---")
     return ("Reminders sent.", 200)
@@ -349,7 +325,7 @@ def trigger_daily_reminder():
 def trigger_morning_reminder():
     """Endpoint triggered by Cloud Scheduler to remind users what they ordered."""
     print("--- Morning Reminder Job Started ---")
-    today = datetime.now()
+    today = date.today()
     if today.weekday() in [5, 6]:
         print("Not a workday. Job ending.")
         return ("Not a workday.", 200)
@@ -383,9 +359,15 @@ def slack_interactive_endpoint():
         meal_block = submitted_values["meal_selection_block"]
         action = meal_block["meal_selection_action"]
         selected_meal = action["selected_option"]["value"]
-        tomorrow = datetime.now() + timedelta(days=1)
-        save_user_order(user_id, selected_meal, tomorrow)
-        confirmation_text = f"Díky! Uložil jsem, že na zítra máš objednáno: *{selected_meal}*"
+        
+        # CORRECTED LOGIC: Determine the date for the order precisely.
+        today = date.today()
+        # Orders are always for the next day.
+        order_for = today + timedelta(days=1)
+        
+        save_user_order(user_id, selected_meal, order_for)
+        
+        confirmation_text = f"Díky! Uložil jsem, že na zítra ({order_for.strftime('%d.%m.')}) máš objednáno: *{selected_meal}*"
         send_slack_message({"channel": user_id, "text": confirmation_text})
         return ("", 200)
 
@@ -396,7 +378,11 @@ def slack_interactive_endpoint():
         if action_id == "open_order_modal":
             print(f"User {user_id} clicked 'I've Ordered'. Opening modal.")
             trigger_id = payload["trigger_id"]
-            menu_items = get_daily_menu()
+            
+            # CORRECTED LOGIC: Fetch menu for the next day.
+            order_for = date.today() + timedelta(days=1)
+            menu_items = get_daily_menu(order_for)
+
             if isinstance(menu_items, str):
                 send_slack_message({"channel": user_id, "text": "Omlouvám se, nepodařilo se mi znovu načíst menu pro výběr."})
                 return ("", 200)
@@ -431,7 +417,6 @@ def oauth_callback():
     data = response.json()
     if not data.get('ok'):
         return (f"OAuth Error: {data.get('error')}", 400)
-
     user_id = data.get('authed_user', {}).get('id')
     if user_id:
         print(f"New user subscribed: {user_id}")
@@ -439,7 +424,6 @@ def oauth_callback():
         welcome_text = "Vítej v PepeEats! 🎉 Od teď ti budu posílat denní připomínky na oběd."
         send_slack_message({"channel": user_id, "text": welcome_text})
         return "<h1>Success!</h1><p>You have been subscribed to PepeEats. You can close this window now.</p>"
-    
     return ("OAuth failed: Could not get user ID.", 500)
 
 @app.route('/admin', methods=['GET'])
@@ -450,7 +434,7 @@ def admin_panel():
         abort(403) # Forbidden
     users_docs = db.collection('users').stream()
     users_list = [{'id': doc.id} for doc in users_docs]
-    today = datetime.now()
+    today = date.today()
     orders_list = get_orders_for_date(today)
     return render_template('admin.html', users=users_list, orders=orders_list, today_str=today.strftime('%Y-%m-%d'))
 
