@@ -3,6 +3,7 @@ import json
 import requests
 import random
 import logging
+import re # NEW: Import the regular expression module
 from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
 
@@ -121,17 +122,19 @@ def get_daily_menu(target_date):
             if len(cols) == 3:
                 name = cols[1].get_text(strip=True)
                 price_text = cols[2].get_text(strip=True)
-                # THIS IS THE FIX: Replace non-breaking space with a regular space
-                price_text = price_text.replace('\xa0', ' ')
-                try:
-                    price_clean = price_text.replace('Kč', '').strip()
-                    price_as_int = int(price_clean)
-                    if price_as_int == TARGET_PRICE:
-                        menu_items.append(name)
-                except (ValueError, TypeError):
-                    continue
+                
+                # THIS IS THE NEW, ROBUST FIX
+                # Instead of cleaning the string, we find the first sequence of digits.
+                match = re.search(r'\d+', price_text)
+                if match:
+                    try:
+                        price_as_int = int(match.group(0))
+                        if price_as_int == TARGET_PRICE:
+                            menu_items.append(name)
+                    except (ValueError, TypeError):
+                        continue # Should not happen with regex, but safe to keep
+
         if not menu_items:
-            # This log will now correctly fire only if there are TRULY no meals for the price
             app.logger.warning(f"No meals found for target price {TARGET_PRICE} Kč on {target_date_string}")
             return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
         return menu_items
@@ -140,7 +143,6 @@ def get_daily_menu(target_date):
         return "Došlo k závažné chybě při stahování menu."
 
 # --- SLACK API & MESSAGE BUILDING ---
-# ... (the rest of the file is unchanged) ...
 def send_slack_message(payload):
     """Generic function to send a message to the Slack API."""
     try:
