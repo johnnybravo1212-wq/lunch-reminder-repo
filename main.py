@@ -3,7 +3,7 @@ import json
 import requests
 import random
 import logging
-import re # Import the regular expression module
+import re
 from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
 
@@ -106,6 +106,10 @@ def get_daily_menu(target_date):
     try:
         response = requests.get(LUNCHDRIVE_URL, timeout=15)
         response.raise_for_status()
+
+        # NEW DEBUGGING STEP: Log the raw HTML content
+        app.logger.info(f"--- RAW HTML START ---\n{response.text}\n--- RAW HTML END ---")
+
         # Use the robust 'lxml' parser
         soup = BeautifulSoup(response.content, 'lxml')
         target_date_string = target_date.strftime("%-d.%-m.%Y")
@@ -120,9 +124,7 @@ def get_daily_menu(target_date):
             return "Chyba: Tabulka s menu nebyla nalezena."
         for row in menu_table.find_all('tr'):
             cols = row.find_all('td')
-            # THE FINAL FIX: Check for 4 columns
             if len(cols) == 4:
-                # THE FINAL FIX: Use correct indices
                 name = cols[2].get_text(strip=True)
                 price_text = cols[3].get_text(strip=True)
                 
