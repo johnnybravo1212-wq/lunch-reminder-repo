@@ -2,6 +2,7 @@ import os
 import json
 import requests
 import random
+import logging # NEW: Import the logging module
 from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
 
@@ -20,12 +21,16 @@ from slack_sdk.signature import SignatureVerifier
 # Initialize Flask App
 app = Flask(__name__)
 
+# NEW: Set up proper logging
+app.logger.setLevel(logging.INFO)
+
 # Initialize Firebase Admin SDK
 # On Google Cloud Run, the SDK automatically finds the project credentials.
 try:
     firebase_admin.initialize_app()
+    app.logger.info("Firebase Admin SDK initialized successfully.")
 except Exception as e:
-    print(f"Firebase Admin SDK already initialized or failed: {e}")
+    app.logger.warning(f"Firebase Admin SDK already initialized or failed: {e}")
 
 # Initialize Firestore Client
 db = firestore.client()
@@ -73,7 +78,6 @@ def save_user_order(user_id, meal_choice, order_for_date):
         'order_for_date': order_for_date.strftime("%Y-%m-%d"),
         'placed_on_date': date.today().strftime("%Y-%m-%d")
     }
-    # Using user_id and date as a unique document ID to prevent duplicate orders
     doc_id = f"{user_id}_{order_for_date.strftime('%Y-%m-%d')}"
     db.collection('orders').document(doc_id).set(order_data)
 
@@ -99,26 +103,21 @@ def get_daily_menu(target_date):
     Fetches and parses the menu for a *specific* day from LunchDrive.
     Returns a list of menu items or an error string.
     """
-    print(f"Attempting to get menu for date: {target_date.strftime('%Y-%m-%d')}.")
+    app.logger.info(f"Attempting to get menu for date: {target_date.strftime('%Y-%m-%d')}.")
     try:
         response = requests.get(LUNCHDRIVE_URL, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'html.parser')
-        
         target_date_string = target_date.strftime("%-d.%-m.%Y")
-        
-        print(f"Searching for menu header with date: '{target_date_string}'")
+        app.logger.info(f"Searching for menu header with date: '{target_date_string}'")
         menu_header = soup.find('h2', string=lambda text: text and target_date_string in text)
-
         if not menu_header:
-            print(f"CRITICAL: Menu header for {target_date_string} was NOT found.")
+            app.logger.error(f"CRITICAL: Menu header for {target_date_string} was NOT found.")
             return f"Menu na {target_date.strftime('%d.%m.')} ještě není k dispozici. 🙁"
-
         menu_table = menu_header.find_next_sibling('table', class_='table-menu')
         menu_items = []
         if not menu_table:
             return "Chyba: Tabulka s menu nebyla nalezena."
-
         for row in menu_table.find_all('tr'):
             cols = row.find_all('td')
             if len(cols) == 3:
@@ -131,14 +130,11 @@ def get_daily_menu(target_date):
                         menu_items.append(name)
                 except (ValueError, TypeError):
                     continue
-        
         if not menu_items:
             return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
-            
         return menu_items
-
     except Exception as e:
-        print(f"CRITICAL ERROR in get_daily_menu: {e}")
+        app.logger.error(f"CRITICAL ERROR in get_daily_menu: {e}", exc_info=True)
         return "Došlo k závažné chybě při stahování menu."
 
 # --- SLACK API & MESSAGE BUILDING ---
@@ -154,10 +150,10 @@ def send_slack_message(payload):
         response.raise_for_status()
         result = response.json()
         if not result.get("ok"):
-            print(f"Slack API Error: {result.get('error')}")
+            app.logger.error(f"Slack API Error: {result.get('error')}")
         return result
     except Exception as e:
-        print(f"An error occurred in send_slack_message: {e}")
+        app.logger.error(f"An error occurred in send_slack_message: {e}", exc_info=True)
         return None
 
 def build_reminder_message_blocks(menu_items):
@@ -165,7 +161,6 @@ def build_reminder_message_blocks(menu_items):
     random_emoji = random.choice(URGENT_EMOJIS)
     menu_text = "\n".join([f"• {item}" for item in menu_items])
     open_app_url = f"{BASE_URL}/open-lunchdrive"
-
     blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"{random_emoji} PepeEats: Objednej oběd NA ZÍTRA! {random_emoji}", "emoji": True}},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*Zítřejší nabídka za {TARGET_PRICE} Kč:*"}},
@@ -269,82 +264,77 @@ def verify_slack_request():
     if request.path == '/slack/interactive':
         verifier = SignatureVerifier(SLACK_SIGNING_SECRET)
         if not verifier.is_valid_request(request.get_data(), request.headers):
-            print("Invalid Slack signature")
+            app.logger.error("Invalid Slack signature")
             abort(403)
 
 @app.route('/send-daily-reminder', methods=['POST'])
 def trigger_daily_reminder():
     """Endpoint triggered by Cloud Scheduler to send the daily lunch menu."""
-    print("--- Daily Reminder Job Started ---")
+    # THIS IS THE MOST IMPORTANT LOG - IT WILL BE RED
+    app.logger.error("!!! KONTROLNÍ LOG: Funkce trigger_daily_reminder SPUŠTĚNA !!!")
+
     today = date.today()
     if today.weekday() not in [0, 1, 2, 3, 6]:
-        print(f"Not a reminder day (Friday/Saturday). Job ending.")
+        app.logger.info(f"Not a reminder day (Today is weekday {today.weekday()}). Job ending.")
         return ("Not a reminder day.", 200)
 
-    # CORRECTED LOGIC: Calculate the date for the next workday explicitly.
-    # If today is Thursday, tomorrow is Friday. If Sunday, tomorrow is Monday.
     if today.weekday() == 3: # Thursday
         next_day = today + timedelta(days=1)
     else: # Sunday, Monday, Tuesday, Wednesday
         next_day = today + timedelta(days=1)
     
-    # Special case for Sunday -> Monday
     if today.weekday() == 6: # Sunday
         next_day = today + timedelta(days=1)
 
-    print(f"Today is {today.strftime('%Y-%m-%d')}. Checking for menu and orders for {next_day.strftime('%Y-%m-%d')}.")
+    app.logger.info(f"Today is {today.strftime('%Y-%m-%d')}. Checking for menu and orders for {next_day.strftime('%Y-%m-%d')}.")
 
     menu_items = get_daily_menu(next_day)
     
     if isinstance(menu_items, str):
-        print(f"Could not get menu: {menu_items}")
+        app.logger.warning(f"Could not get menu: {menu_items}")
         return (menu_items, 200)
     
     subscribed_users = get_all_subscribed_users()
     if not subscribed_users:
-        print("No subscribed users to notify.")
+        app.logger.info("No subscribed users to notify.")
         return ("No users.", 200)
 
     message_blocks = build_reminder_message_blocks(menu_items)
     users_reminded = 0
 
     for user_id in subscribed_users:
-        # CORRECTED LOGIC: Check if the user has already ordered for the specific next day.
         if not check_if_user_ordered_for_date(user_id, next_day):
-            print(f"Sending reminder to {user_id} for {next_day.strftime('%Y-%m-%d')}")
+            app.logger.info(f"Sending reminder to {user_id} for {next_day.strftime('%Y-%m-%d')}")
             payload = {"channel": user_id, "blocks": message_blocks}
             send_slack_message(payload)
             users_reminded += 1
         else:
-            print(f"Skipping user {user_id}, they have already ordered for {next_day.strftime('%Y-%m-%d')}.")
+            app.logger.info(f"Skipping user {user_id}, they have already ordered for {next_day.strftime('%Y-%m-%d')}.")
             
-    print(f"--- Reminders sent to {users_reminded} users. Job finished. ---")
+    app.logger.info(f"--- Reminders sent to {users_reminded} users. Job finished. ---")
     return ("Reminders sent.", 200)
 
 @app.route('/send-morning-reminder', methods=['POST'])
 def trigger_morning_reminder():
     """Endpoint triggered by Cloud Scheduler to remind users what they ordered."""
-    print("--- Morning Reminder Job Started ---")
+    app.logger.info("--- Morning Reminder Job Started ---")
     today = date.today()
     if today.weekday() in [5, 6]:
-        print("Not a workday. Job ending.")
+        app.logger.info("Not a workday. Job ending.")
         return ("Not a workday.", 200)
-
     todays_orders = get_orders_for_date(today)
     if not todays_orders:
-        print("No orders found for today.")
+        app.logger.info("No orders found for today.")
         return ("No orders for today.", 200)
-
     for order in todays_orders:
         user_id = order.get('slack_user_id')
         meal = order.get('meal_description')
         if user_id and meal:
-            print(f"Sending morning reminder to {user_id}")
+            app.logger.info(f"Sending morning reminder to {user_id}")
             message = f"Dobré ráno! 🐸 Jen připomínám, že dnes máš k obědu: *{meal}*"
             payload = {"channel": user_id, "text": message}
             send_slack_message(payload)
-            
-    print(f"--- Morning reminders sent for {len(todays_orders)} orders. Job finished. ---")
+    app.logger.info(f"--- Morning reminders sent for {len(todays_orders)} orders. Job finished. ---")
     return ("Morning reminders sent.", 200)
 
 @app.route('/slack/interactive', methods=['POST'])
@@ -352,52 +342,38 @@ def slack_interactive_endpoint():
     """Handles all interactive components from Slack (button clicks, modal submits)."""
     payload = json.loads(request.form.get("payload"))
     user_id = payload["user"]["id"]
-    
     if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "order_submission":
-        print(f"Received modal submission from {user_id}")
+        app.logger.info(f"Received modal submission from {user_id}")
         submitted_values = payload["view"]["state"]["values"]
         meal_block = submitted_values["meal_selection_block"]
         action = meal_block["meal_selection_action"]
         selected_meal = action["selected_option"]["value"]
-        
-        # CORRECTED LOGIC: Determine the date for the order precisely.
         today = date.today()
-        # Orders are always for the next day.
         order_for = today + timedelta(days=1)
-        
         save_user_order(user_id, selected_meal, order_for)
-        
         confirmation_text = f"Díky! Uložil jsem, že na zítra ({order_for.strftime('%d.%m.')}) máš objednáno: *{selected_meal}*"
         send_slack_message({"channel": user_id, "text": confirmation_text})
         return ("", 200)
-
     if payload["type"] == "block_actions":
         action = payload["actions"][0]
         action_id = action.get("action_id")
-        
         if action_id == "open_order_modal":
-            print(f"User {user_id} clicked 'I've Ordered'. Opening modal.")
+            app.logger.info(f"User {user_id} clicked 'I've Ordered'. Opening modal.")
             trigger_id = payload["trigger_id"]
-            
-            # CORRECTED LOGIC: Fetch menu for the next day.
             order_for = date.today() + timedelta(days=1)
             menu_items = get_daily_menu(order_for)
-
             if isinstance(menu_items, str):
                 send_slack_message({"channel": user_id, "text": "Omlouvám se, nepodařilo se mi znovu načíst menu pro výběr."})
                 return ("", 200)
-            
             modal_view = build_order_modal_view(menu_items)
             requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": modal_view}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
             return ("", 200)
-            
         elif action_id == "unsubscribe":
-            print(f"User {user_id} clicked 'Unsubscribe'.")
+            app.logger.info(f"User {user_id} clicked 'Unsubscribe'.")
             remove_user(user_id)
             confirmation_text = "Je mi to líto, ale zrušil jsem ti odběr. Kdyby sis to rozmyslel, stačí se znovu přihlásit. 🐸"
             send_slack_message({"channel": user_id, "text": confirmation_text})
             return ("", 200)
-            
     return ("Unhandled interaction", 200)
 
 @app.route('/subscribe', methods=['GET'])
@@ -419,7 +395,7 @@ def oauth_callback():
         return (f"OAuth Error: {data.get('error')}", 400)
     user_id = data.get('authed_user', {}).get('id')
     if user_id:
-        print(f"New user subscribed: {user_id}")
+        app.logger.info(f"New user subscribed: {user_id}")
         add_user(user_id)
         welcome_text = "Vítej v PepeEats! 🎉 Od teď ti budu posílat denní připomínky na oběd."
         send_slack_message({"channel": user_id, "text": welcome_text})
