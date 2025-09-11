@@ -48,7 +48,9 @@ ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
 # Emojis and other fun stuff
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️", "🐸"]
 PEPE_IMAGES = [
-    "https://i.imgur.com/n98w2Fy.png"
+    "https://i.imgur.com/XoF6m62.png", # FeelsGoodMan
+    "https://i.imgur.com/sBq2pPT.png", # Sad Frog
+    "https://i.imgur.com/2OFa0s8.png"  # MonkaS / Nervous Pepe
 ]
 
 # --- DATABASE HELPER FUNCTIONS ---
@@ -92,6 +94,29 @@ def check_if_user_ordered_for_date(user_id, target_date):
     doc_id = f"{user_id}_{target_date.strftime('%Y-%m-%d')}"
     order_doc = db.collection('orders').document(doc_id).get()
     return order_doc.exists
+
+def save_daily_menu(menu_date, menu_items):
+    """Saves the menu for a specific date into the 'daily_menus' collection."""
+    doc_id = menu_date.strftime("%Y-%m-%d")
+    menu_data = {
+        'date': doc_id,
+        'menu_items': menu_items,
+        'created_at': firestore.SERVER_TIMESTAMP
+    }
+    db.collection('daily_menus').document(doc_id).set(menu_data)
+    app.logger.info(f"Successfully saved menu for {doc_id} to Firestore.")
+
+def get_saved_menu_for_date(target_date):
+    """Retrieves a saved menu for a specific date from Firestore."""
+    doc_id = target_date.strftime("%Y-%m-%d")
+    app.logger.info(f"Attempting to get saved menu for {doc_id} from Firestore.")
+    menu_doc = db.collection('daily_menus').document(doc_id).get()
+    if menu_doc.exists:
+        app.logger.info(f"Found saved menu for {doc_id}.")
+        return menu_doc.to_dict().get('menu_items', [])
+    else:
+        app.logger.error(f"Could not find saved menu for {doc_id} in Firestore.")
+        return None
 
 # --- MENU SCRAPING LOGIC ---
 
@@ -137,22 +162,6 @@ def get_daily_menu(target_date):
         return "Došlo k závažné chybě při stahování menu."
 
 # --- SLACK API & MESSAGE BUILDING ---
-def send_slack_message(payload):
-    """Generic function to send a message to the Slack API."""
-    try:
-        response = requests.post(
-            "https://slack.com/api/chat.postMessage",
-            json=payload,
-            headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
-        )
-        response.raise_for_status()
-        result = response.json()
-        if not result.get("ok"):
-            app.logger.error(f"Slack API Error: {result.get('error')}")
-        return result
-    except Exception as e:
-        app.logger.error(f"An error occurred in send_slack_message: {e}", exc_info=True)
-        return None
 
 def build_reminder_message_blocks(menu_items):
     """Builds the Slack Block Kit structure for the daily reminder."""
@@ -273,17 +282,21 @@ def trigger_daily_reminder():
     if today.weekday() not in [0, 1, 2, 3, 6]:
         app.logger.info(f"Not a reminder day (Today is weekday {today.weekday()}). Job ending.")
         return ("Not a reminder day.", 200)
-    if today.weekday() == 3: # Thursday
-        next_day = today + timedelta(days=1)
-    else: # Sunday, Monday, Tuesday, Wednesday
-        next_day = today + timedelta(days=1)
-    if today.weekday() == 6: # Sunday
-        next_day = today + timedelta(days=1)
+    
+    # Calculate the date for the next workday.
+    next_day = today + timedelta(days=1)
+    if today.weekday() == 4: # If today is Friday...
+        next_day = today + timedelta(days=3) # ...the next menu is for Monday
+    
     app.logger.info(f"Today is {today.strftime('%Y-%m-%d')}. Checking for menu and orders for {next_day.strftime('%Y-%m-%d')}.")
     menu_items = get_daily_menu(next_day)
     if isinstance(menu_items, str):
         app.logger.warning(f"Could not get menu: {menu_items}")
         return (menu_items, 200)
+    
+    # NEW: Save the successfully scraped menu to the database
+    save_daily_menu(next_day, menu_items)
+    
     subscribed_users = get_all_subscribed_users()
     if not subscribed_users:
         app.logger.info("No subscribed users to notify.")
@@ -337,8 +350,10 @@ def slack_interactive_endpoint():
         selected_meal = action["selected_option"]["value"]
         today = date.today()
         order_for = today + timedelta(days=1)
+        if today.weekday() == 4: # If today is Friday, order is for Monday
+            order_for = today + timedelta(days=3)
         save_user_order(user_id, selected_meal, order_for)
-        confirmation_text = f"Díky! Uložil jsem, že na zítra ({order_for.strftime('%d.%m.')}) máš objednáno: *{selected_meal}*"
+        confirmation_text = f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš objednáno: *{selected_meal}*"
         send_slack_message({"channel": user_id, "text": confirmation_text})
         return ("", 200)
     if payload["type"] == "block_actions":
@@ -348,13 +363,22 @@ def slack_interactive_endpoint():
             app.logger.info(f"User {user_id} clicked 'I've Ordered'. Opening modal.")
             trigger_id = payload["trigger_id"]
             
-            # THIS IS THE FIX: We must calculate tomorrow's date and pass it to the function.
-            order_for = date.today() + timedelta(days=1)
-            menu_items = get_daily_menu(order_for)
+            today = date.today()
+            order_for = today + timedelta(days=1)
+            if today.weekday() == 4: # If today is Friday, modal is for Monday
+                order_for = today + timedelta(days=3)
             
-            if isinstance(menu_items, str):
-                send_slack_message({"channel": user_id, "text": "Omlouvám se, nepodařilo se mi znovu načíst menu pro výběr."})
-                return ("", 200)
+            # The robust change: Get menu from our database
+            menu_items = get_saved_menu_for_date(order_for)
+            
+            if menu_items is None: # Check for None specifically
+                app.logger.error(f"Failed to retrieve menu from DB for {order_for}. Falling back to live scrape.")
+                # Fallback to scraping again if DB lookup fails
+                menu_items = get_daily_menu(order_for)
+                if isinstance(menu_items, str):
+                    send_slack_message({"channel": user_id, "text": "Omlouvám se, nepodařilo se mi načíst menu ani z databáze, ani z webu."})
+                    return ("", 200)
+            
             modal_view = build_order_modal_view(menu_items)
             requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": modal_view}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
             return ("", 200)
