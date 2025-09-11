@@ -202,7 +202,21 @@ def build_reminder_message_blocks(menu_items):
 
 def build_order_modal_view(menu_items):
     """Builds the Slack modal for selecting a meal."""
-    options = [{"text": {"type": "plain_text", "text": item, "emoji": True}, "value": item} for item in menu_items]
+    # THIS IS THE FIX: Truncate long menu items
+    options = []
+    for item in menu_items:
+        # Slack's limit for option text is 75 characters.
+        if len(item) > 75:
+            display_text = item[:72] + "..."
+        else:
+            display_text = item
+        
+        options.append({
+            "text": {"type": "plain_text", "text": display_text, "emoji": True},
+            # The 'value' can be longer, so we keep the full name here for saving to the DB
+            "value": item
+        })
+
     view = {
         "type": "modal", "callback_id": "order_submission", "title": {"type": "plain_text", "text": "PepeEats", "emoji": True},
         "submit": {"type": "plain_text", "text": "Uložit", "emoji": True}, "close": {"type": "plain_text", "text": "Zrušit", "emoji": True},
@@ -394,9 +408,8 @@ def slack_interactive_endpoint():
             
             modal_view = build_order_modal_view(menu_items)
             
-            # --- NEW ROBUST LOGGING ---
             app.logger.info(f"Trigger ID: {trigger_id}")
-            app.logger.info(f"Payload for Slack modal: {json.dumps(modal_view, indent=2)}")
+            app.logger.info(f"Payload for Slack modal: {json.dumps(modal_view, indent=2, ensure_ascii=False)}")
 
             try:
                 response = requests.post(
@@ -408,7 +421,6 @@ def slack_interactive_endpoint():
                 app.logger.info(f"Slack API response body: {response.text}")
             except Exception as e:
                 app.logger.error(f"Failed to post to Slack API: {e}", exc_info=True)
-            # --- END OF NEW LOGGING ---
 
             return ("", 200)
         elif action_id == "unsubscribe":
