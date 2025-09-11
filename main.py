@@ -48,9 +48,7 @@ ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
 # Emojis and other fun stuff
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️", "🐸"]
 PEPE_IMAGES = [
-    "https://i.imgur.com/rvC5iI6.png", # Pepe Silvia
-    "https://i.imgur.com/VzBqS1h.png", # Smug Frog
-    "https://i.imgur.com/dJNDaF7.png"  # Pepe Punch
+    "https://i.imgur.com/n98w2Fy.png"
 ]
 
 # --- DATABASE HELPER FUNCTIONS ---
@@ -106,11 +104,6 @@ def get_daily_menu(target_date):
     try:
         response = requests.get(LUNCHDRIVE_URL, timeout=15)
         response.raise_for_status()
-
-        # NEW DEBUGGING STEP: Log the raw HTML content
-        app.logger.info(f"--- RAW HTML START ---\n{response.text}\n--- RAW HTML END ---")
-
-        # Use the robust 'lxml' parser
         soup = BeautifulSoup(response.content, 'lxml')
         target_date_string = target_date.strftime("%-d.%-m.%Y")
         app.logger.info(f"Searching for menu header with date: '{target_date_string}'")
@@ -127,7 +120,6 @@ def get_daily_menu(target_date):
             if len(cols) == 4:
                 name = cols[2].get_text(strip=True)
                 price_text = cols[3].get_text(strip=True)
-                
                 match = re.search(r'\d+', price_text)
                 if match:
                     try:
@@ -355,8 +347,11 @@ def slack_interactive_endpoint():
         if action_id == "open_order_modal":
             app.logger.info(f"User {user_id} clicked 'I've Ordered'. Opening modal.")
             trigger_id = payload["trigger_id"]
+            
+            # THIS IS THE FIX: We must calculate tomorrow's date and pass it to the function.
             order_for = date.today() + timedelta(days=1)
             menu_items = get_daily_menu(order_for)
+            
             if isinstance(menu_items, str):
                 send_slack_message({"channel": user_id, "text": "Omlouvám se, nepodařilo se mi znovu načíst menu pro výběr."})
                 return ("", 200)
