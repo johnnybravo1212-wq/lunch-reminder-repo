@@ -163,7 +163,6 @@ def get_daily_menu(target_date):
 
 # --- SLACK API & MESSAGE BUILDING ---
 
-# THIS IS THE FIX: The missing function is returned here.
 def send_slack_message(payload):
     """Generic function to send a message to the Slack API."""
     try:
@@ -302,8 +301,8 @@ def trigger_daily_reminder():
         return ("Not a reminder day.", 200)
     
     next_day = today + timedelta(days=1)
-    if today.weekday() == 4: # If today is Friday...
-        next_day = today + timedelta(days=3) # ...the next menu is for Monday
+    if today.weekday() == 4:
+        next_day = today + timedelta(days=3)
     
     app.logger.info(f"Today is {today.strftime('%Y-%m-%d')}. Checking for menu and orders for {next_day.strftime('%Y-%m-%d')}.")
     menu_items = get_daily_menu(next_day)
@@ -366,7 +365,7 @@ def slack_interactive_endpoint():
         selected_meal = action["selected_option"]["value"]
         today = date.today()
         order_for = today + timedelta(days=1)
-        if today.weekday() == 4: # If today is Friday, order is for Monday
+        if today.weekday() == 4:
             order_for = today + timedelta(days=3)
         save_user_order(user_id, selected_meal, order_for)
         confirmation_text = f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš objednáno: *{selected_meal}*"
@@ -381,7 +380,7 @@ def slack_interactive_endpoint():
             
             today = date.today()
             order_for = today + timedelta(days=1)
-            if today.weekday() == 4: # If today is Friday, modal is for Monday
+            if today.weekday() == 4:
                 order_for = today + timedelta(days=3)
             
             menu_items = get_saved_menu_for_date(order_for)
@@ -394,7 +393,23 @@ def slack_interactive_endpoint():
                     return ("", 200)
             
             modal_view = build_order_modal_view(menu_items)
-            requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": modal_view}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
+            
+            # --- NEW ROBUST LOGGING ---
+            app.logger.info(f"Trigger ID: {trigger_id}")
+            app.logger.info(f"Payload for Slack modal: {json.dumps(modal_view, indent=2)}")
+
+            try:
+                response = requests.post(
+                    "https://slack.com/api/views.open",
+                    json={"trigger_id": trigger_id, "view": modal_view},
+                    headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                )
+                app.logger.info(f"Slack API response status: {response.status_code}")
+                app.logger.info(f"Slack API response body: {response.text}")
+            except Exception as e:
+                app.logger.error(f"Failed to post to Slack API: {e}", exc_info=True)
+            # --- END OF NEW LOGGING ---
+
             return ("", 200)
         elif action_id == "unsubscribe":
             app.logger.info(f"User {user_id} clicked 'Unsubscribe'.")
