@@ -163,6 +163,24 @@ def get_daily_menu(target_date):
 
 # --- SLACK API & MESSAGE BUILDING ---
 
+# THIS IS THE FIX: The missing function is returned here.
+def send_slack_message(payload):
+    """Generic function to send a message to the Slack API."""
+    try:
+        response = requests.post(
+            "https://slack.com/api/chat.postMessage",
+            json=payload,
+            headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+        )
+        response.raise_for_status()
+        result = response.json()
+        if not result.get("ok"):
+            app.logger.error(f"Slack API Error: {result.get('error')}")
+        return result
+    except Exception as e:
+        app.logger.error(f"An error occurred in send_slack_message: {e}", exc_info=True)
+        return None
+
 def build_reminder_message_blocks(menu_items):
     """Builds the Slack Block Kit structure for the daily reminder."""
     random_emoji = random.choice(URGENT_EMOJIS)
@@ -283,7 +301,6 @@ def trigger_daily_reminder():
         app.logger.info(f"Not a reminder day (Today is weekday {today.weekday()}). Job ending.")
         return ("Not a reminder day.", 200)
     
-    # Calculate the date for the next workday.
     next_day = today + timedelta(days=1)
     if today.weekday() == 4: # If today is Friday...
         next_day = today + timedelta(days=3) # ...the next menu is for Monday
@@ -294,7 +311,6 @@ def trigger_daily_reminder():
         app.logger.warning(f"Could not get menu: {menu_items}")
         return (menu_items, 200)
     
-    # NEW: Save the successfully scraped menu to the database
     save_daily_menu(next_day, menu_items)
     
     subscribed_users = get_all_subscribed_users()
@@ -368,12 +384,10 @@ def slack_interactive_endpoint():
             if today.weekday() == 4: # If today is Friday, modal is for Monday
                 order_for = today + timedelta(days=3)
             
-            # The robust change: Get menu from our database
             menu_items = get_saved_menu_for_date(order_for)
             
-            if menu_items is None: # Check for None specifically
+            if menu_items is None:
                 app.logger.error(f"Failed to retrieve menu from DB for {order_for}. Falling back to live scrape.")
-                # Fallback to scraping again if DB lookup fails
                 menu_items = get_daily_menu(order_for)
                 if isinstance(menu_items, str):
                     send_slack_message({"channel": user_id, "text": "Omlouvám se, nepodařilo se mi načíst menu ani z databáze, ani z webu."})
