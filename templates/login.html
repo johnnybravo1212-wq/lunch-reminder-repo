@@ -16,19 +16,20 @@
         <button id="login-button">Přihlásit se přes Google</button>
     </div>
 
-    <!-- Import Firebase SDK -->
+    <!-- Import Firebase SDK (kompatibilní verze pro náš skript) -->
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
 
     <script>
-        // Vaše unikátní Firebase konfigurace
+        // Vaše unikátní a SPRÁVNÁ Firebase konfigurace
         const firebaseConfig = {
-          apiKey: "AIzaSyBXtInE_6Zn1mCmXn-ChBLUsERg9kdtvic",
-          authDomain: "dusanice-6df4a.firebaseapp.com",
-          projectId: "dusanice-6df4a",
-          storageBucket: "dusanice-6df4a.firebasestorage.app",
-          messagingSenderId: "606124283299",
-          appId: "1:606124283299:web:1e0230edd39a15278a7616"
+          apiKey: "AIzaSyCMRhPyg0ShX1GkSsA_RiDQ7E3C1fKafU4",
+          authDomain: "dusaniceofhell.firebaseapp.com",
+          projectId: "dusaniceofhell",
+          storageBucket: "dusaniceofhell.firebasestorage.app",
+          messagingSenderId: "115586274057",
+          appId: "1:115586274057:web:239d74c7e984073fb7b9d8",
+          measurementId: "G-XJ6Z575LYB"
         };
 
         // Inicializace Firebase
@@ -39,7 +40,7 @@
             const provider = new firebase.auth.GoogleAuthProvider();
             auth.signInWithPopup(provider)
                 .then((result) => {
-                    // Uživatel se úspěšně přihlásil
+                    // Uživatel se úspěšně přihlásil, získáme jeho token
                     return result.user.getIdToken();
                 })
                 .then((idToken) => {
@@ -50,7 +51,7 @@
                 })
                 .catch((error) => {
                     console.error("Chyba při přihlašování: ", error);
-                    alert("Došlo k chybě při přihlašování.");
+                    alert("Došlo k chybě při přihlašování: " + error.message);
                 });
         });
     </script>
