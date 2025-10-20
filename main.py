@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
+from slack_sdk.signature import SignatureVerifier
 
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, render_template, render_template_string, abort, redirect, url_for
@@ -365,3 +366,4 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
