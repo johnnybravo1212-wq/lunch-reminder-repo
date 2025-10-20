@@ -21,40 +21,51 @@
 <body>
     <div class="container">
         <a href="/logout" class="logout">Odhlásit se</a>
-        <h1>🐸 PepeEats Nastavení</h1>
+        <h1>🐸 PepeEats</h1>
         
         <p>Vítejte! Jste přihlášen jako: <code>{{ user.email }}</code></p>
         
         <hr>
-        
-        <h3>Moje nastavení</h3>
 
-        <form method="POST" action="/settings">
-            <div class="form-section">
-                <label>Jak často chceš dostávat připomínku na oběd?</label>
-                <div class="radio-group">
-                    <label><input type="radio" name="notification_frequency" value="2" {% if settings.notification_frequency == '2' %}checked{% endif %}> Každé 2 hodiny</label>
-                    <label><input type="radio" name="notification_frequency" value="4" {% if settings.notification_frequency == '4' %}checked{% endif %}> Každé 4 hodiny</label>
-                    <label><input type="radio" name="notification_frequency" value="daily" {% if settings.notification_frequency == 'daily' or not settings.notification_frequency %}checked{% endif %}> Jednou denně (v poledne)</label>
+        {% if is_subscribed %}
+            <!-- Uživatel JE přihlášen k odběru, zobrazíme nastavení -->
+            <h3>Moje nastavení</h3>
+            <form method="POST" action="/settings">
+                <div class="form-section">
+                    <label>Jak často chceš dostávat připomínku na oběd?</label>
+                    <div class="radio-group">
+                        <label><input type="radio" name="notification_frequency" value="2" {% if settings.notification_frequency == '2' %}checked{% endif %}> Každé 2 hodiny</label>
+                        <label><input type="radio" name="notification_frequency" value="4" {% if settings.notification_frequency == '4' %}checked{% endif %}> Každé 4 hodiny</label>
+                        <label><input type="radio" name="notification_frequency" value="daily" {% if settings.notification_frequency == 'daily' or not settings.notification_frequency %}checked{% endif %}> Jednou denně (v poledne)</label>
+                    </div>
+                     <p class="note">Notifikace chodí v pracovní dny mezi 9:00 a 17:00.</p>
                 </div>
-                 <p class="note">Notifikace chodí v pracovní dny mezi 9:00 a 17:00.</p>
-            </div>
 
-            <div class="form-section">
-                 <label>Nastavení pro vývojáře</label>
-                 <div class="checkbox-group">
-                    <label>
-                        <input type="checkbox" name="is_test_user" value="true" {% if settings.is_test_user %}checked{% endif %}>
-                        Testovací režim
-                    </label>
-                    <p class="note">Pokud je zapnuto, notifikace přijde při každém spuštění jobu, bez ohledu na čas.</p>
-                 </div>
-            </div>
+                <div class="form-section">
+                     <label>Nastavení pro vývojáře</label>
+                     <div class="checkbox-group">
+                        <label>
+                            <input type="checkbox" name="is_test_user" value="true" {% if settings.is_test_user %}checked{% endif %}>
+                            Testovací režim
+                        </label>
+                        <p class="note">Pokud je zapnuto, notifikace přijde při každém spuštění jobu, bez ohledu na čas.</p>
+                     </div>
+                </div>
 
-            <button type="submit">Uložit nastavení</button>
-        </form>
-
-        <p class="success-msg" id="success-message">Nastavení bylo úspěšně uloženo!</p>
+                <button type="submit">Uložit nastavení</button>
+            </form>
+            <p class="success-msg" id="success-message">Nastavení bylo úspěšně uloženo!</p>
+        {% else %}
+            <!-- Uživatel NENÍ přihlášen k odběru, zobrazíme tlačítko -->
+            <h3>Přidat do Slacku</h3>
+            <p>Vypadá to, že ještě nemáš PepeEats přidaného ve Slacku. Klikni na tlačítko a přidej si ho!</p>
+            <a href="{{ slack_auth_url }}">
+                <img alt="Add to Slack" height="40" width="139"
+                     src="https://platform.slack-edge.com/img/add_to_slack.png"
+                     srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" />
+            </a>
+            <p class="note">Po úspěšném přidání se vrať na tuto stránku pro další nastavení.</p>
+        {% endif %}
     </div>
 
     <script>
