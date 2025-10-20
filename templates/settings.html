@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>PepeEats Nastavení</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 2em auto; padding: 1em; background-color: #f9f9f9; }
+        .container { background-color: #fff; padding: 2em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        code { background-color: #eee; padding: 2px 5px; border-radius: 3px; }
+        .logout { float: right; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/logout" class="logout">Odhlásit se</a>
+        <h1>🐸 PepeEats Nastavení</h1>
+        
+        <p>Vítejte! Jste přihlášen jako: <code>{{ user.email }}</code></p>
+        
+        <hr>
+        
+        <h3>Moje nastavení</h3>
+        <p><i>Již brzy zde najdete další možnosti...</i></p>
+    </div>
+</body>
+</html>
