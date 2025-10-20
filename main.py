@@ -327,8 +327,17 @@ def slack_interactive_endpoint():
 
     return ("Unhandled interaction", 200)
 
+# --- ZMĚNA: Přidána ochrana před neoprávněným přístupem ---
 @app.route('/subscribe', methods=['GET'])
 def subscribe():
+    user = verify_firebase_token(request)
+    if not user:
+        return redirect(url_for('login_page', next=url_for('subscribe')))
+
+    user_email = user.get('email', '')
+    if not (user_email.endswith('@rohlik.cz') or user_email == 'johnnybravo1212@gmail.com'):
+        return redirect(url_for('unauthorized_page'))
+
     params = {'client_id': SLACK_CLIENT_ID, 'scope': 'chat:write,users:read,users:read.email', 'redirect_uri': f"{BASE_URL}/slack/oauth/callback"}
     slack_auth_url = f"https://slack.com/oauth/v2/authorize?{urlencode(params)}"
     return render_template('subscribe.html', slack_auth_url=slack_auth_url)
