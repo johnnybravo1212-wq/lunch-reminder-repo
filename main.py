@@ -33,7 +33,7 @@ BASE_URL = os.environ.get("BASE_URL")
 LUNCHDRIVE_URL = os.environ.get("LUNCHDRIVE_URL", "https://lunchdrive.cz/cs/d/3792")
 TARGET_PRICE = int(os.environ.get("TARGET_PRICE", 125))
 ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
-SLACK_NOTIFICATION_CHANNEL_ID = os.environ.get("SLACK_NOTIFICATION_CHANNEL_ID")
+SLACK_NOTIFICATION_CHANNEL_ID = os.environ.get("SLACK_NOTIFICATION_CHANNEL_ID") # Toto slouží jako fallback
 
 # --- EMOJIS & IMAGES ---
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️", "🐸"]
@@ -42,59 +42,41 @@ PEPE_IMAGES = ["https://i.imgur.com/XoF6m62.png", "https://i.imgur.com/sBq2pPT.p
 # --- DATABASE HELPER FUNCTIONS ---
 
 def get_user_settings(user_email):
-    """Načte nastavení pro daného uživatele z kolekce 'user_settings'."""
-    default_settings = {'notification_schedule': 'POLEDNE'}
+    default_settings = {'notification_schedule': 'POLEDNE', 'notification_channel': ''}
     if not user_email: return default_settings
-    
     settings_doc = db.collection('user_settings').document(user_email).get()
-    if settings_doc.exists:
-        settings = settings_doc.to_dict()
-        if 'notification_schedule' not in settings:
-             settings['notification_schedule'] = 'POLEDNE'
-        return settings
-    return default_settings
+    if not settings_doc.exists: return default_settings
+    settings = settings_doc.to_dict()
+    settings.setdefault('notification_schedule', 'POLEDNE')
+    settings.setdefault('notification_channel', '')
+    return settings
 
 def save_user_settings(user_email, settings_data):
-    """Uloží nastavení pro daného uživatele."""
     if not user_email: return
     db.collection('user_settings').document(user_email).set(settings_data, merge=True)
 
 def get_slack_users_for_schedule(target_schedule):
-    """Najde všechny Slack uživatele, kteří mají nastavený daný časový plán."""
     users_to_notify = {}
-    
-    # 1. Najdeme e-maily s daným nastavením
     settings_ref = db.collection('user_settings').where('notification_schedule', '==', target_schedule).stream()
-    emails_with_schedule = {setting.id for setting in settings_ref}
-
-    # 2. Najdeme uživatele, jejichž e-mail odpovídá
+    emails_with_schedule = {s.id for s in settings_ref}
     if emails_with_schedule:
         users_ref = db.collection('users').where('google_email', 'in', list(emails_with_schedule)).stream()
-        for user in users_ref:
-            users_to_notify[user.id] = user.to_dict()
-
-    # 3. Najdeme uživatele bez nastavení (pro výchozí POLEDNE)
+        for user in users_ref: users_to_notify[user.id] = user.to_dict()
     if target_schedule == 'POLEDNE':
         all_users_ref = db.collection('users').stream()
         all_settings_ref = db.collection('user_settings').stream()
-        emails_with_any_setting = {setting.id for setting in all_settings_ref}
-        
+        emails_with_any_setting = {s.id for s in all_settings_ref}
         for user in all_users_ref:
             user_data = user.to_dict()
             if user_data.get('google_email') not in emails_with_any_setting and user.id not in users_to_notify:
                 users_to_notify[user.id] = user_data
-
     return users_to_notify
 
-def get_orderable_people():
-    people_ref = db.collection('orderable_people').order_by('name').stream()
-    return ["PRO SEBE"] + [doc.to_dict().get('name') for doc in people_ref if doc.to_dict().get('name')]
-
-def save_user_order(user_id, meal_choice, order_for_date, ordered_for_person):
-    order_data = {'ordered_by_user_id': user_id, 'meal_description': meal_choice, 'ordered_for_person': ordered_for_person,'order_for_date': order_for_date.strftime("%Y-%m-%d"), 'placed_on_date': date.today().strftime("%Y-%m-%d")}
-    doc_id = f"{user_id}_{ordered_for_person}_{order_for_date.strftime('%Y-%m-%d')}"
+def save_user_order(ordered_by_id, meal_choice, order_for_date, ordered_for_id):
+    order_data = {'ordered_by_user_id': ordered_by_id, 'meal_description': meal_choice, 'ordered_for_user_id': ordered_for_id,'order_for_date': order_for_date.strftime("%Y-%m-%d"), 'placed_on_date': date.today().strftime("%Y-%m-%d")}
+    doc_id = f"{ordered_by_id}_{ordered_for_id}_{order_for_date.strftime('%Y-%m-%d')}"
     db.collection('orders').document(doc_id).set(order_data)
-    db.collection('users').document(user_id).set({'snoozed_until': None}, merge=True)
+    db.collection('users').document(ordered_by_id).set({'snoozed_until': None}, merge=True)
 
 def check_if_user_ordered_for_date(user_id, target_date):
     query = db.collection('orders').where('order_for_date', '==', target_date.strftime("%Y-%m-%d")).where('ordered_by_user_id', '==', user_id)
@@ -107,12 +89,10 @@ def is_user_snoozed(user_data, check_date):
     except (ValueError, TypeError): return False
 
 def save_daily_menu(menu_date, menu_items):
-    doc_id = menu_date.strftime("%Y-%m-%d")
-    db.collection('daily_menus').document(doc_id).set({'date': doc_id, 'menu_items': menu_items, 'created_at': firestore.SERVER_TIMESTAMP})
+    db.collection('daily_menus').document(menu_date.strftime("%Y-%m-%d")).set({'menu_items': menu_items}, merge=True)
 
 def get_saved_menu_for_date(target_date):
-    doc_id = target_date.strftime("%Y-%m-%d")
-    menu_doc = db.collection('daily_menus').document(doc_id).get()
+    menu_doc = db.collection('daily_menus').document(target_date.strftime("%Y-%m-%d")).get()
     return menu_doc.to_dict().get('menu_items', []) if menu_doc.exists else None
 
 def get_daily_menu(target_date):
@@ -128,14 +108,10 @@ def get_daily_menu(target_date):
         menu_items = []
         for row in menu_table.find_all('tr'):
             cols = row.find_all('td')
-            if len(cols) == 4:
-                name = cols[2].get_text(strip=True)
-                price_text = cols[3].get_text(strip=True)
-                match = re.search(r'\d+', price_text)
-                if match:
-                    try:
-                        if int(match.group(0)) == TARGET_PRICE: menu_items.append(name)
-                    except (ValueError, TypeError): continue
+            if len(cols) == 4 and (match := re.search(r'\d+', cols[3].get_text(strip=True))):
+                try:
+                    if int(match.group(0)) == TARGET_PRICE: menu_items.append(cols[2].get_text(strip=True))
+                except (ValueError, TypeError): continue
         if not menu_items: return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
         return menu_items
     except Exception as e:
@@ -146,9 +122,7 @@ def get_daily_menu(target_date):
 
 def send_slack_message(payload):
     try:
-        response = requests.post("https://slack.com/api/chat.postMessage", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
-        response.raise_for_status()
-        if not response.json().get("ok"): app.logger.error(f"Slack API Error: {response.json().get('error')}")
+        requests.post("https://slack.com/api/chat.postMessage", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}).raise_for_status()
     except Exception as e: app.logger.error(f"Error in send_slack_message: {e}", exc_info=True)
 
 def send_ephemeral_slack_message(channel_id, user_id, text, blocks=None):
@@ -171,21 +145,18 @@ def build_reminder_message_blocks(menu_items):
                 {"type": "button", "text": {"type": "plain_text", "text": "Zítra jsem na HO"}, "action_id": "home_office_tomorrow"},
                 {"type": "button", "text": {"type": "plain_text", "text": "Zrušit odběr"}, "style": "danger", "action_id": "unsubscribe"}]}]
 
-def build_order_modal_view(menu_items, people_list):
+def build_order_modal_view(menu_items):
     menu_options = [{"text": {"type": "plain_text", "text": (item[:72] + '...') if len(item) > 75 else item}, "value": item} for item in menu_items]
-    people_options = [{"text": {"type": "plain_text", "text": person}, "value": person} for person in people_list]
     return {"type": "modal", "callback_id": "order_submission", "title": {"type": "plain_text", "text": "PepeEats"},
             "submit": {"type": "plain_text", "text": "Uložit"}, "close": {"type": "plain_text", "text": "Zrušit"},
             "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "Super! Co a pro koho sis dnes objednal/a?"}},
                        {"type": "input", "block_id": "meal_selection_block", "element": {"type": "static_select", "placeholder": {"type": "plain_text", "text": "Vyber jídlo"}, "options": menu_options}, "label": {"type": "plain_text", "text": "Tvoje volba"}},
-                       {"type": "input", "block_id": "person_selection_block", "element": {"type": "static_select", "placeholder": {"type": "plain_text", "text": "Vyber osobu"}, "options": people_options}, "label": {"type": "plain_text", "text": "Objednávka je pro:"}}]}
+                       {"type": "input", "block_id": "person_selection_block", "element": {"type": "users_select", "placeholder": {"type": "plain_text", "text": "Vyber kolegu"}, "action_id": "person_selection_action"}, "label": {"type": "plain_text", "text": "Objednávka je pro:"}}]}
 
 # --- FLASK ROUTES ---
 
 def verify_firebase_token(request):
-    session_cookie = request.cookies.get('session_token')
-    if not session_cookie: return None
-    try: return auth.verify_id_token(session_cookie)
+    try: return auth.verify_id_token(request.cookies.get('session_token'))
     except Exception: return None
 
 @app.before_request
@@ -201,7 +172,6 @@ def health_check(): return "PepeEats is alive!", 200
 def settings_page():
     user = verify_firebase_token(request)
     if not user: return redirect(url_for('login_page'))
-
     user_email = user.get('email', '')
     if not (user_email.endswith('@rohlik.cz') or user_email == 'johnnybravo1212@gmail.com'):
         return redirect(url_for('unauthorized_page'))
@@ -209,21 +179,20 @@ def settings_page():
     try:
         slack_res = requests.get("https://slack.com/api/users.lookupByEmail", headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}, params={'email': user_email})
         slack_res.raise_for_status()
-        slack_info = slack_res.json()
-        if slack_info.get('ok'):
-            slack_id = slack_info['user']['id']
-            db.collection('users').document(slack_id).set({'google_email': user_email}, merge=True)
-            app.logger.info(f"Successfully linked Google email {user_email} to Slack ID {slack_id}")
+        if (slack_info := slack_res.json()).get('ok'):
+            db.collection('users').document(slack_info['user']['id']).set({'google_email': user_email}, merge=True)
     except Exception as e:
-        app.logger.error(f"Failed to link account for {user_email}. Maybe they are not subscribed via Slack? Error: {e}")
+        app.logger.error(f"Failed to link account for {user_email}: {e}")
 
     if request.method == 'POST':
-        schedule = request.form.get('notification_schedule')
-        save_user_settings(user_email, {'notification_schedule': schedule})
+        settings_data = {
+            'notification_schedule': request.form.get('notification_schedule'),
+            'notification_channel': request.form.get('notification_channel', '').strip()
+        }
+        save_user_settings(user_email, settings_data)
         return redirect(url_for('settings_page') + '?saved=true')
 
-    current_settings = get_user_settings(user_email)
-    return render_template('settings.html', user=user, settings=current_settings)
+    return render_template('settings.html', user=user, settings=get_user_settings(user_email))
 
 @app.route('/unauthorized')
 def unauthorized_page(): return render_template('unauthorized.html'), 403
@@ -239,21 +208,14 @@ def logout():
 
 @app.route('/send-daily-reminder', methods=['POST'])
 def trigger_daily_reminder():
-    app.logger.info("!!! HOURLY REMINDER JOB STARTED !!!")
     current_hour_prague = (datetime.utcnow().hour + 2) % 24
-
-    target_schedule = None
-    if 8 <= current_hour_prague < 10: target_schedule = "RANO"
-    elif 10 <= current_hour_prague < 12: target_schedule = "POLEDNE"
-    
+    target_schedule = "RANO" if 8 <= current_hour_prague < 10 else "POLEDNE" if 10 <= current_hour_prague < 12 else None
     if not target_schedule: return f"Current hour {current_hour_prague} not in target window.", 200
-
-    app.logger.info(f"Running job for schedule: {target_schedule}")
+    
     today = date.today()
     if today.weekday() not in [0, 1, 2, 3, 6]: return "Not a reminder day.", 200
 
     next_day = today + timedelta(days=3) if today.weekday() == 4 else today + timedelta(days=1)
-    
     menu_items = get_daily_menu(next_day)
     if isinstance(menu_items, str): return menu_items, 200
     save_daily_menu(next_day, menu_items)
@@ -279,11 +241,27 @@ def slack_interactive_endpoint():
     if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "order_submission":
         values = payload["view"]["state"]["values"]
         selected_meal = values["meal_selection_block"]["meal_selection_action"]["selected_option"]["value"]
-        selected_person = values["person_selection_block"]["person_selection_action"]["selected_option"]["value"]
-        save_user_order(user_id, selected_meal, order_for, selected_person)
-        send_slack_message({"channel": user_id, "text": f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš pro *{selected_person}* objednáno: *{selected_meal}*"})
-        if selected_person != "PRO SEBE" and SLACK_NOTIFICATION_CHANNEL_ID:
-            send_slack_message({"channel": SLACK_NOTIFICATION_CHANNEL_ID, "text": f"Uživatel <@{user_id}> právě objednal na zítra oběd pro *{selected_person}*: _{selected_meal}_"})
+        selected_user_id = values["person_selection_block"]["person_selection_action"]["selected_user"]
+        
+        # Uložíme objednávku
+        save_user_order(user_id, selected_meal, order_for, selected_user_id)
+        
+        # Pošleme potvrzení objednávajícímu
+        send_slack_message({"channel": user_id, "text": f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš pro <@{selected_user_id}> objednáno: *{selected_meal}*"})
+        
+        # Zjistíme kanál pro notifikace
+        user_doc = db.collection('users').document(user_id).get()
+        user_email = user_doc.to_dict().get('google_email') if user_doc.exists else None
+        user_settings = get_user_settings(user_email)
+        notification_channel = user_settings.get('notification_channel') or SLACK_NOTIFICATION_CHANNEL_ID
+
+        if notification_channel:
+            send_slack_message({"channel": notification_channel, "text": f"Uživatel <@{user_id}> právě objednal na zítra oběd pro <@{selected_user_id}>: _{selected_meal}_"})
+
+        # Pošleme DM tomu, pro koho se objednalo (pokud to není ten samý uživatel)
+        if user_id != selected_user_id:
+             send_slack_message({"channel": selected_user_id, "text": f"Ahoj! Jen abys věděl/a, <@{user_id}> ti právě objednal/a na zítra k obědu: *{selected_meal}*"})
+        
         return ("", 200)
 
     if payload["type"] == "block_actions":
@@ -293,21 +271,23 @@ def slack_interactive_endpoint():
         if action_id in ["open_order_modal", "ho_order_for_other"]:
             menu = get_saved_menu_for_date(order_for) or get_daily_menu(order_for)
             if isinstance(menu, str): send_ephemeral_slack_message(channel_id, user_id, "Chyba: Nepodařilo se načíst menu.")
-            else:
-                people = get_orderable_people()
-                requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": build_order_modal_view(menu, people)}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
+            else: requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": build_order_modal_view(menu)}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
+        
         elif action_id in ["snooze_today", "ho_skip_ordering"]:
             db.collection('users').document(user_id).set({'snoozed_until': order_for.strftime("%Y-%m-%d")}, merge=True)
             msg = "OK, pro dnešek máš klid. 🤫" if action_id == "snooze_today" else "Jasně, pro zítřek tě přeskočím. Užij si home office! 💻"
             send_ephemeral_slack_message(channel_id, user_id, msg)
+        
         elif action_id == "home_office_tomorrow":
             blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "Chceš i přesto objednat oběd pro někoho jiného?"}},
                       {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Ano, objednám"}, "style": "primary", "action_id": "ho_order_for_other"},
                                                        {"type": "button", "text": {"type": "plain_text", "text": "Ne, přeskočit"}, "action_id": "ho_skip_ordering"}]}]
             send_ephemeral_slack_message(channel_id, user_id, "Objednávka pro někoho jiného?", blocks)
+        
         elif action_id == "unsubscribe":
             db.collection('users').document(user_id).delete()
             send_slack_message({"channel": user_id, "text": "Je mi to líto, ale zrušil jsem ti odběr. 🐸"})
+        
         return ("", 200)
 
     return ("Unhandled interaction", 200)
@@ -334,7 +314,7 @@ def oauth_callback():
 
 @app.route("/open-lunchdrive")
 def open_lunchdrive():
-    html = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Otevřít LunchDrive…</title><style>body{font-family:system-ui,sans-serif;margin:0;padding:1.5rem;text-align:center;background-color:#f5f5f5;}.container{max-width:400px;margin:2rem auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);}h3{font-size:1.5rem;margin-top:0;}p{color:#555;}.button{display:inline-block;padding:0.8rem 1.5rem;margin-top:1rem;background-color:#007aff;color:white;text-decoration:none;border-radius:8px;font-weight:600;}.note{font-size:0.9em;color:#888;margin-top:2rem;}</style><script>(function(){var ua=navigator.userAgent||"",isAndroid=/android/i.test(ua),isIOS=/iphone|ipad|ipod/i.test(ua),now=Date.now(),fallbackPlay="https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en",fallbackIOS="https://apps.apple.com/cz/app/lunchdrive/id1496245341",packageName="cz.trueapps.lunchdrive",schemeUrl="lunchdrive://open",intentUrl="intent://#Intent;package="+packageName+";S.browser_fallback_url="+encodeURIComponent(fallbackPlay)+";end";function o(u){try{window.location.href=u}catch(e){}}if(isAndroid){var i=document.createElement('iframe');i.style.display='none',document.body.appendChild(i);try{i.src=schemeUrl}catch(e){}setTimeout(function(){o(intentUrl)},700),setTimeout(function(){Date.now()-now<3500&&o(fallbackPlay)},2400)}else isIOS?(o(schemeUrl),setTimeout(function(){Date.now()-now<2500&&o(fallbackIOS)},2000)):o(fallbackPlay)})();</script></head><body><div class="container"><h3>Pokouším se otevřít aplikaci LunchDrive…</h3><p>Pokud se aplikace neotevřela automaticky, pravděpodobně to blokuje interní prohlížeč Slacku.</p><a href="https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en" class="button">Otevřít manuálně v obchodě</a><p class="note"><b>Tip:</b> Pro nejlepší funkčnost klikněte na tři tečky (⋮) vpravo nahoře a zvolte "Otevřít v systémovém prohlížeči".</p></div></body></html>"""
+    html = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Otevřít LunchDrive…</title><style>body{font-family:system-ui,sans-serif;margin:0;padding:1.5rem;text-align:center;background-color:#f5f5f5;}.container{max-width:400px;margin:2rem auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);}h3{font-size:1.5rem;margin-top:0;}p{color:#555;}.button{display:inline-block;padding:0.8rem 1.5rem;margin-top:1rem;background-color:#007aff;color:white;text-decoration:none;border-radius:8px;font-weight:600;}.note{font-size:0.9em;color:#888;margin-top:2rem;}</style><script>(function(){var u=navigator.userAgent||"",i=/android/i.test(u),o=/iphone|ipad|ipod/i.test(u),n=Date.now(),d="https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en",a="https://apps.apple.com/cz/app/lunchdrive/id1496245341",p="cz.trueapps.lunchdrive",c="lunchdrive://open",l="intent://#Intent;package="+p+";S.browser_fallback_url="+encodeURIComponent(d)+";end";function r(e){try{window.location.href=e}catch(t){}}if(i){var t=document.createElement("iframe");t.style.display="none",document.body.appendChild(t);try{t.src=c}catch(e){}setTimeout(function(){r(l)},700),setTimeout(function(){Date.now()-n<3500&&r(d)},2400)}else o?(r(c),setTimeout(function(){Date.now()-n<2500&&r(a)},2000)):r(d)})();</script></head><body><div class="container"><h3>Pokouším se otevřít aplikaci LunchDrive…</h3><p>Pokud se aplikace neotevřela automaticky, pravděpodobně to blokuje interní prohlížeč Slacku.</p><a href="https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en" class="button">Otevřít manuálně v obchodě</a><p class="note"><b>Tip:</b> Pro nejlepší funkčnost klikněte na tři tečky (⋮) vpravo nahoře a zvolte "Otevřít v systémovém prohlížeči".</p></div></body></html>"""
     return render_template_string(html)
 
 @app.route('/admin', methods=['GET'])
@@ -352,4 +332,3 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-
