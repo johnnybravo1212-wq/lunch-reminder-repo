@@ -119,16 +119,29 @@ def send_ephemeral_slack_message(channel_id, user_id, text, blocks=None):
 
 def build_reminder_message_blocks(menu_items):
     menu_text = "\n".join([f"• {item}" for item in menu_items])
-    return [{"type": "header", "text": {"type": "plain_text", "text": f"{random.choice(URGENT_EMOJIS)} PepeEats: Objednej oběd NA ZÍTRA!", "emoji": True}},
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"*Zítřejší nabídka za {TARGET_PRICE} Kč:*"}}, {"type": "divider"},
-            {"type": "section", "text": {"type": "mrkdwn", "text": menu_text}},
-            {"type": "image", "image_url": random.choice(PEPE_IMAGES), "alt_text": "A wild Pepe appears"}, {"type": "divider"},
-            {"type": "section", "text": {"type": "mrkdwn", "text": f"Klikněte zde pro objednání: <{BASE_URL}/open-lunchdrive|*Otevřít LunchDrive*>"}},
-            {"type": "actions", "elements": [
-                {"type": "button", "text": {"type": "plain_text", "text": "✅ Mám objednáno"}, "style": "primary", "action_id": "open_order_modal"},
-                {"type": "button", "text": {"type": "plain_text", "text": "Snooze pro dnešek"}, "action_id": "snooze_today"},
-                {"type": "button", "text": {"type": "plain_text", "text": "Zítra jsem na HO"}, "action_id": "home_office_tomorrow"},
-                {"type": "button", "text": {"type": "plain_text", "text": "Zrušit odběr"}, "style": "danger", "action_id": "unsubscribe"}]}]
+    settings_url = f"{BASE_URL}/settings"
+    
+    return [
+        {"type": "header", "text": {"type": "plain_text", "text": f"{random.choice(URGENT_EMOJIS)} PepeEats: Objednej oběd NA ZÍTRA!", "emoji": True}},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"*Zítřejší nabídka za {TARGET_PRICE} Kč:*"}},
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": menu_text}},
+        {"type": "image", "image_url": random.choice(PEPE_IMAGES), "alt_text": "A wild Pepe appears"},
+        {"type": "divider"},
+        {"type": "section", "text": {"type": "mrkdwn", "text": f"Klikněte zde pro objednání: <{BASE_URL}/open-lunchdrive|*Otevřít LunchDrive*>"}},
+        {"type": "actions", "elements": [
+            {"type": "button", "text": {"type": "plain_text", "text": "✅ Mám objednáno"}, "style": "primary", "action_id": "open_order_modal"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Snooze pro dnešek"}, "action_id": "snooze_today"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Zítra jsem na HO"}, "action_id": "home_office_tomorrow"},
+            # --- ZMĚNA: Nové tlačítko pro feedback ---
+            {"type": "button", "text": {"type": "plain_text", "text": "Chybí ti funkce?"}, "action_id": "open_feedback_modal"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Zrušit odběr"}, "style": "danger", "action_id": "unsubscribe"}
+        ]},
+        # --- ZMĚNA: Nový kontextový blok s odkazem na nastavení ---
+        {"type": "context", "elements": [
+            {"type": "mrkdwn", "text": f"🕒 Nevyhovuje čas nebo frekvence? <{settings_url}|Změň si nastavení>"}
+        ]}
+    ]
 
 def build_order_modal_view(menu_items):
     menu_options = [{"text": {"type": "plain_text", "text": (item[:72] + '...') if len(item) > 75 else item}, "value": item} for item in menu_items]
@@ -236,13 +249,26 @@ def trigger_daily_reminder():
     app.logger.info(f"Job finished. Dynamic reminders sent to {users_reminded} users.")
     return f"Dynamic reminders sent to {users_reminded} users.", 200
 
-# <--- ZDE JE TA FINÁLNÍ ZMĚNA ---
 @app.route('/slack/interactive', methods=['POST'])
 def slack_interactive_endpoint():
     payload = json.loads(request.form.get("payload"))
     user_id = payload["user"]["id"]
     today = date.today()
     order_for = today + timedelta(days=3) if today.weekday() == 4 else today + timedelta(days=1)
+
+    # --- ZMĚNA: Zpracování odeslání feedback modalu ---
+    if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "feedback_submission":
+        feedback_text = payload["view"]["state"]["values"]["feedback_block"]["feedback_input"]["value"]
+        
+        # Uložení do Firestore
+        db.collection("feedback").add({
+            "text": feedback_text,
+            "user_id": user_id,
+            "submitted_at": firestore.SERVER_TIMESTAMP
+        })
+
+        send_ephemeral_slack_message(user_id, user_id, "Díky za zpětnou vazbu! Uložil jsem si to. 🐸")
+        return ("", 200)
 
     if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "order_submission":
         values = payload["view"]["state"]["values"]
@@ -251,10 +277,8 @@ def slack_interactive_endpoint():
         
         save_user_order(user_id, selected_meal, order_for, selected_user_id)
         
-        # Zpráva č.1: Potvrzení tomu, kdo objednával
         send_slack_message({"channel": user_id, "text": f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš pro <@{selected_user_id}> objednáno: *{selected_meal}*"})
         
-        # Zpráva č.2: Notifikace tomu, pro koho se objednalo (pokud to není ten samý člověk)
         if user_id != selected_user_id:
              send_slack_message({"channel": selected_user_id, "text": f"Ahoj! Jen abys věděl/a, <@{user_id}> ti právě objednal/a na zítra k obědu: *{selected_meal}*"})
         
@@ -263,6 +287,28 @@ def slack_interactive_endpoint():
     if payload["type"] == "block_actions":
         action = payload["actions"][0]
         action_id, channel_id, trigger_id = action.get("action_id"), payload["channel"]["id"], payload.get("trigger_id")
+
+        if action_id == "open_feedback_modal":
+            feedback_modal = {
+                "type": "modal",
+                "callback_id": "feedback_submission",
+                "title": {"type": "plain_text", "text": "Zpětná vazba pro PepeEats"},
+                "submit": {"type": "plain_text", "text": "Odeslat"},
+                "blocks": [
+                    {
+                        "type": "input",
+                        "block_id": "feedback_block",
+                        "label": {"type": "plain_text", "text": "Co bys vylepšil/a nebo přidal/a?"},
+                        "element": {
+                            "type": "plain_text_input",
+                            "action_id": "feedback_input",
+                            "multiline": True
+                        }
+                    }
+                ]
+            }
+            requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": feedback_modal}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
+            return ("", 200)
 
         if action_id in ["open_order_modal", "ho_order_for_other"]:
             menu = get_saved_menu_for_date(order_for) or get_daily_menu(order_for)
@@ -321,7 +367,10 @@ def admin_panel():
     today = date.today()
     orders_ref = db.collection('orders').where('order_for_date', '==', today.strftime("%Y-%m-%d"))
     orders_list = [doc.to_dict() for doc in orders_ref.stream()]
-    return render_template('admin.html', users=users_list, orders=orders_list, today_str=today.strftime('%Y-%m-%d'))
+    feedback_ref = db.collection('feedback').order_by('submitted_at', direction=firestore.Query.DESCENDING).limit(20).stream()
+    feedback_list = [doc.to_dict() for doc in feedback_ref]
+    return render_template('admin.html', users=users_list, orders=orders_list, feedback=feedback_list, today_str=today.strftime('%Y-%m-%d'))
+
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
