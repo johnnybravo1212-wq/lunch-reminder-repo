@@ -114,6 +114,16 @@ def get_user_monthly_spending(user_id, year, month):
     total_spent = sum(order.to_dict().get('price', 125) for order in orders)
     return total_spent, len(orders)
 
+def get_slack_id_from_email(email):
+    try:
+        slack_res = requests.get("https://slack.com/api/users.lookupByEmail", headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}, params={'email': email})
+        slack_res.raise_for_status()
+        if (info := slack_res.json()).get('ok'):
+            return info['user']['id']
+    except Exception as e:
+        app.logger.error(f"Failed to lookup user by email {email}: {e}")
+    return None
+
 # --- SLACK API & MESSAGE BUILDING ---
 
 def send_slack_message(payload):
@@ -166,7 +176,7 @@ def verify_slack_request():
         if not verifier.is_valid_request(request.get_data(), request.headers): abort(403)
 
 @app.route('/')
-def health_check(): return "PepeEats is alive!", 200
+def health_check(): return redirect(url_for('settings_page'))
 
 @app.route('/settings', methods=['GET', 'POST'])
 def settings_page():
@@ -176,14 +186,13 @@ def settings_page():
     if not (user_email.endswith('@rohlik.cz') or user_email == 'johnnybravo1212@gmail.com'):
         return redirect(url_for('unauthorized_page'))
     
-    try:
-        slack_res = requests.get("https://slack.com/api/users.lookupByEmail", headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}, params={'email': user_email})
-        slack_res.raise_for_status()
-        if (info := slack_res.json()).get('ok'):
-            db.collection('users').document(info['user']['id']).set({'google_email': user_email}, merge=True)
-    except Exception as e:
-        app.logger.error(f"Failed to link account for {user_email}: {e}")
+    slack_id = get_slack_id_from_email(user_email)
+    is_subscribed = db.collection('users').document(slack_id).get().exists if slack_id else False
 
+    if is_subscribed:
+        # Pokud je uživatel přihlášen, můžeme propojit účty
+        db.collection('users').document(slack_id).set({'google_email': user_email}, merge=True)
+    
     if request.method == 'POST':
         settings_data = {
             'notification_frequency': request.form.get('notification_frequency'),
@@ -191,8 +200,10 @@ def settings_page():
         }
         save_user_settings(user_email, settings_data)
         return redirect(url_for('settings_page') + '?saved=true')
-
-    return render_template('settings.html', user=user, settings=get_user_settings(user_email))
+    
+    params = {'client_id': SLACK_CLIENT_ID, 'scope': 'chat:write,users:read,users:read.email', 'redirect_uri': f"{BASE_URL}/slack/oauth/callback"}
+    slack_auth_url = f"https://slack.com/oauth/v2/authorize?{urlencode(params)}"
+    return render_template('settings.html', user=user, settings=get_user_settings(user_email), is_subscribed=is_subscribed, slack_auth_url=slack_auth_url)
 
 @app.route('/unauthorized')
 def unauthorized_page(): return render_template('unauthorized.html'), 403
@@ -210,29 +221,21 @@ def logout():
 def trigger_daily_reminder():
     app.logger.info("!!! DYNAMIC REMINDER JOB STARTED !!!")
     current_hour_prague = (datetime.utcnow().hour + 2) % 24
-    
     today = date.today()
     if today.weekday() not in [0, 1, 2, 3, 6]: return "Not a reminder day (Fri/Sat).", 200
-
     next_day = today + timedelta(days=3) if today.weekday() == 4 else today + timedelta(days=1)
-    
     menu_items = get_saved_menu_for_date(next_day) or get_daily_menu(next_day)
     if isinstance(menu_items, str):
         app.logger.error(f"Could not get menu: {menu_items}")
         return menu_items, 500
     save_daily_menu(next_day, menu_items)
-    
     all_users = get_all_users_with_settings()
     if not all_users: return "No users found.", 200
-
     message_blocks = build_reminder_message_blocks(menu_items)
     users_reminded = 0
-
     for user_id, data in all_users.items():
         user_data, settings = data['user_data'], data['settings']
-        
         if check_if_user_ordered_for_date(user_id, next_day) or is_user_snoozed(user_data, next_day): continue
-
         send_now = False
         if settings.get('is_test_user'):
             send_now = True
@@ -243,11 +246,9 @@ def trigger_daily_reminder():
                 if freq == '2' and (current_hour_prague - 9) % 2 == 0: send_now = True
                 elif freq == '4' and (current_hour_prague - 9) % 4 == 0: send_now = True
                 elif freq == 'daily' and 11 <= current_hour_prague < 13: send_now = True
-
         if send_now:
             send_slack_message({"channel": user_id, "blocks": message_blocks})
             users_reminded += 1
-            
     app.logger.info(f"Job finished. Dynamic reminders sent to {users_reminded} users.")
     return f"Dynamic reminders sent to {users_reminded} users.", 200
 
@@ -259,30 +260,22 @@ def slack_interactive_endpoint():
     trigger_id = payload.get("trigger_id")
     today = date.today()
     order_for = today + timedelta(days=3) if today.weekday() == 4 else today + timedelta(days=1)
-
     if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "feedback_submission":
         feedback_text = payload["view"]["state"]["values"]["feedback_block"]["feedback_input"]["value"]
         db.collection("feedback").add({ "text": feedback_text, "user_id": user_id, "submitted_at": firestore.SERVER_TIMESTAMP })
         send_ephemeral_slack_message(channel_id, user_id, "Díky za zpětnou vazbu! Uložil jsem si to. 🐸")
         return ("", 200)
-
     if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "order_submission":
         values = payload["view"]["state"]["values"]
         selected_meal = values["meal_selection_block"]["meal_select_action"]["selected_option"]["value"]
         selected_user_id = values["person_selection_block"]["person_select_action"]["selected_user"]
-        
         save_user_order(user_id, selected_meal, order_for, selected_user_id)
-        
         send_slack_message({"channel": user_id, "text": f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš pro <@{selected_user_id}> objednáno: *{selected_meal}*"})
-        
         if user_id != selected_user_id:
              send_slack_message({"channel": selected_user_id, "text": f"Ahoj! Jen abys věděl/a, <@{user_id}> ti právě objednal/a na zítra k obědu: *{selected_meal}*"})
-        
         return ("", 200)
-
     if payload["type"] == "block_actions":
         action_id = payload["actions"][0].get("action_id")
-
         if action_id == "check_balance":
             year, month = today.year, today.month
             workdays = calculate_workdays(year, month)
@@ -294,53 +287,33 @@ def slack_interactive_endpoint():
                     f"• Utraceno: *{spent} Kč*\n"
                     f"• Zbývá: *{total_budget - spent} Kč*")
             send_ephemeral_slack_message(channel_id, user_id, text)
-            return ("", 200)
-
-        if action_id == "open_feedback_modal":
+        elif action_id == "open_feedback_modal":
             feedback_modal = { "type": "modal", "callback_id": "feedback_submission", "title": {"type": "plain_text", "text": "Zpětná vazba pro PepeEats"}, "submit": {"type": "plain_text", "text": "Odeslat"},
                 "blocks": [{"type": "input", "block_id": "feedback_block", "label": {"type": "plain_text", "text": "Co bys vylepšil/a nebo přidal/a?"},
                             "element": {"type": "plain_text_input", "action_id": "feedback_input", "multiline": True}}]}
             requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": feedback_modal}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
-            return ("", 200)
-
-        if action_id in ["open_order_modal", "ho_order_for_other"]:
+        elif action_id in ["open_order_modal", "ho_order_for_other"]:
             menu = get_saved_menu_for_date(order_for) or get_daily_menu(order_for)
             if isinstance(menu, str): send_ephemeral_slack_message(channel_id, user_id, "Chyba: Nepodařilo se načíst menu.")
             else: requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": build_order_modal_view(menu)}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
-        
         elif action_id in ["snooze_today", "ho_skip_ordering"]:
             db.collection('users').document(user_id).set({'snoozed_until': order_for.strftime("%Y-%m-%d")}, merge=True)
             msg = "OK, pro dnešek máš klid. 🤫" if action_id == "snooze_today" else "Jasně, pro zítřek tě přeskočím. Užij si home office! 💻"
             send_ephemeral_slack_message(channel_id, user_id, msg)
-        
         elif action_id == "home_office_tomorrow":
             blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": "Chceš i přesto objednat oběd pro někoho jiného?"}},
                       {"type": "actions", "elements": [{"type": "button", "text": {"type": "plain_text", "text": "Ano, objednám"}, "style": "primary", "action_id": "ho_order_for_other"},
                                                        {"type": "button", "text": {"type": "plain_text", "text": "Ne, přeskočit"}, "action_id": "ho_skip_ordering"}]}]
             send_ephemeral_slack_message(channel_id, user_id, "Objednávka pro někoho jiného?", blocks)
-        
         elif action_id == "unsubscribe":
             db.collection('users').document(user_id).delete()
             send_slack_message({"channel": user_id, "text": "Je mi to líto, ale zrušil jsem ti odběr. 🐸"})
-        
         return ("", 200)
-
     return ("Unhandled interaction", 200)
 
-# --- ZMĚNA: Přidána ochrana před neoprávněným přístupem ---
-@app.route('/subscribe', methods=['GET'])
+@app.route('/subscribe')
 def subscribe():
-    user = verify_firebase_token(request)
-    if not user:
-        return redirect(url_for('login_page', next=url_for('subscribe')))
-
-    user_email = user.get('email', '')
-    if not (user_email.endswith('@rohlik.cz') or user_email == 'johnnybravo1212@gmail.com'):
-        return redirect(url_for('unauthorized_page'))
-
-    params = {'client_id': SLACK_CLIENT_ID, 'scope': 'chat:write,users:read,users:read.email', 'redirect_uri': f"{BASE_URL}/slack/oauth/callback"}
-    slack_auth_url = f"https://slack.com/oauth/v2/authorize?{urlencode(params)}"
-    return render_template('subscribe.html', slack_auth_url=slack_auth_url)
+    return redirect(url_for('settings_page'))
 
 @app.route('/slack/oauth/callback', methods=['GET'])
 def oauth_callback():
@@ -352,8 +325,8 @@ def oauth_callback():
     user_id = data.get('authed_user', {}).get('id')
     if user_id:
         db.collection('users').document(user_id).set({'subscribed_at': firestore.SERVER_TIMESTAMP}, merge=True)
-        send_slack_message({"channel": user_id, "text": "Vítej v PepeEats! 🎉 Od teď ti budu posílat denní připomínky na oběd."})
-        return "<h1>Success!</h1><p>You have been subscribed. You can close this window.</p>"
+        # Po úspěšném přidání přesměrujeme zpět na nastavení
+        return redirect(url_for('settings_page'))
     return "OAuth failed: Could not get user ID.", 500
 
 @app.route("/open-lunchdrive")
