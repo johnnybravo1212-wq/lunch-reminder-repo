@@ -12,7 +12,7 @@ from flask import Flask, request, jsonify, render_template, render_template_stri
 
 # Imports for Google Cloud Firestore and Firebase Admin SDK
 import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import credentials, firestore, auth
 
 # Imports for Slack Request Verification
 from slack_sdk.signature import SignatureVerifier
@@ -373,6 +373,45 @@ def admin_panel():
     orders_list = get_orders_for_date(today)
     return render_template('admin.html', users=users_list, orders=orders_list, today_str=today.strftime('%Y-%m-%d'))
 
+
+def verify_firebase_token(request):
+    """Pomocná funkce pro ověření Firebase tokenu z cookie."""
+    session_cookie = request.cookies.get('session_token')
+    if not session_cookie:
+        return None # Uživatel není přihlášen
+    try:
+        decoded_token = auth.verify_id_token(session_cookie)
+        return decoded_token
+    except auth.InvalidIdTokenError:
+        return None # Token je neplatný nebo vypršel
+    except Exception as e:
+        app.logger.error(f"Error verifying Firebase token: {e}")
+        return None
+
+@app.route('/settings')
+def settings_page():
+    """Zobrazí chráněnou stránku s nastavením."""
+    user = verify_firebase_token(request)
+    if not user:
+        # Pokud uživatel není přihlášen, přesměrujeme ho na login
+        return redirect(url_for('login_page'))
+    
+    # Uživatel je ověřen, můžeme zobrazit stránku
+    return render_template('settings.html', user=user)
+
+@app.route('/login')
+def login_page():
+    """Zobrazí stránku pro přihlášení."""
+    return render_template('login.html')
+
+@app.route('/logout')
+def logout():
+    """Odhlásí uživatele."""
+    response = redirect(url_for('login_page'))
+    # Smažeme cookie tím, že nastavíme její platnost do minulosti
+    response.set_cookie('session_token', '', expires=0, path='/')
+    return response
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
@@ -384,3 +423,4 @@ if __name__ == "__main__":
     ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
     SLACK_NOTIFICATION_CHANNEL_ID = os.environ.get("SLACK_NOTIFICATION_CHANNEL_ID")
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
