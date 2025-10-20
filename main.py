@@ -236,6 +236,7 @@ def trigger_daily_reminder():
     app.logger.info(f"Job finished. Dynamic reminders sent to {users_reminded} users.")
     return f"Dynamic reminders sent to {users_reminded} users.", 200
 
+# <--- ZDE JE TA FINÁLNÍ ZMĚNA ---
 @app.route('/slack/interactive', methods=['POST'])
 def slack_interactive_endpoint():
     payload = json.loads(request.form.get("payload"))
@@ -249,8 +250,11 @@ def slack_interactive_endpoint():
         selected_user_id = values["person_selection_block"]["person_select_action"]["selected_user"]
         
         save_user_order(user_id, selected_meal, order_for, selected_user_id)
+        
+        # Zpráva č.1: Potvrzení tomu, kdo objednával
         send_slack_message({"channel": user_id, "text": f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš pro <@{selected_user_id}> objednáno: *{selected_meal}*"})
         
+        # Zpráva č.2: Notifikace tomu, pro koho se objednalo (pokud to není ten samý člověk)
         if user_id != selected_user_id:
              send_slack_message({"channel": selected_user_id, "text": f"Ahoj! Jen abys věděl/a, <@{user_id}> ti právě objednal/a na zítra k obědu: *{selected_meal}*"})
         
@@ -318,7 +322,6 @@ def admin_panel():
     orders_ref = db.collection('orders').where('order_for_date', '==', today.strftime("%Y-%m-%d"))
     orders_list = [doc.to_dict() for doc in orders_ref.stream()]
     return render_template('admin.html', users=users_list, orders=orders_list, today_str=today.strftime('%Y-%m-%d'))
-
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
