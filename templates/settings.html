@@ -11,11 +11,13 @@
         .logout { float: right; }
         form { margin-top: 1.5em; }
         label { font-weight: bold; display: block; margin-bottom: 0.5em; }
-        input, select { width: 95%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; margin-bottom: 1em; }
+        input[type="text"] { width: 95%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; margin-bottom: 1em; }
         button { background-color: #007aff; color: white; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; margin-top: 1em; }
         button:hover { background-color: #0056b3; }
         .success-msg { color: green; font-weight: bold; margin-top: 1em; display: none; }
         .note { font-size: 0.8em; color: #666; }
+        .radio-group label, .checkbox-group label { font-weight: normal; display: inline-block; margin-right: 15px; }
+        .form-section { margin-bottom: 1.5em; }
     </style>
 </head>
 <body>
@@ -30,15 +32,32 @@
         <h3>Moje nastavení</h3>
 
         <form method="POST" action="/settings">
-            <label for="notification_schedule">Kdy chceš dostávat připomínku na oběd?</label>
-            <select id="notification_schedule" name="notification_schedule">
-                <option value="POLEDNE" {% if settings.notification_schedule == 'POLEDNE' %}selected{% endif %}>V poledne (cca 11:00)</option>
-                <option value="RANO" {% if settings.notification_schedule == 'RANO' %}selected{% endif %}>Ráno (cca 9:00)</option>
-            </select>
+            <div class="form-section">
+                <label>Jak často chceš dostávat připomínku na oběd?</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="notification_frequency" value="2" {% if settings.notification_frequency == '2' %}checked{% endif %}> Každé 2 hodiny</label>
+                    <label><input type="radio" name="notification_frequency" value="4" {% if settings.notification_frequency == '4' %}checked{% endif %}> Každé 4 hodiny</label>
+                    <label><input type="radio" name="notification_frequency" value="daily" {% if settings.notification_frequency == 'daily' or not settings.notification_frequency %}checked{% endif %}> Jednou denně (v poledne)</label>
+                </div>
+                 <p class="note">Notifikace chodí v pracovní dny mezi 9:00 a 17:00.</p>
+            </div>
 
-            <label for="notification_channel">ID kanálu pro notifikace o objednávkách</label>
-            <input type="text" id="notification_channel" name="notification_channel" value="{{ settings.notification_channel or '' }}" placeholder="Např. C03PC2BJMRN">
-            <p class="note">Pokud necháte pole prázdné, použije se výchozí systémový kanál.</p>
+            <div class="form-section">
+                <label for="notification_channel">ID kanálu pro notifikace o objednávkách</label>
+                <input type="text" id="notification_channel" name="notification_channel" value="{{ settings.notification_channel or '' }}" placeholder="Např. C03PC2BJMRN">
+                <p class="note">Pokud necháte pole prázdné, použije se výchozí systémový kanál.</p>
+            </div>
+
+            <div class="form-section">
+                 <label>Nastavení pro vývojáře</label>
+                 <div class="checkbox-group">
+                    <label>
+                        <input type="checkbox" name="is_test_user" value="true" {% if settings.is_test_user %}checked{% endif %}>
+                        Testovací režim
+                    </label>
+                    <p class="note">Pokud je zapnuto, notifikace přijde při každém spuštění jobu, bez ohledu na čas.</p>
+                 </div>
+            </div>
 
             <button type="submit">Uložit nastavení</button>
         </form>
