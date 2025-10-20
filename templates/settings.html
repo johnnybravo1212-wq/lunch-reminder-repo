@@ -11,7 +11,6 @@
         .logout { float: right; }
         form { margin-top: 1.5em; }
         label { font-weight: bold; display: block; margin-bottom: 0.5em; }
-        input[type="text"] { width: 95%; padding: 8px; border-radius: 4px; border: 1px solid #ccc; margin-bottom: 1em; }
         button { background-color: #007aff; color: white; padding: 10px 15px; border: none; border-radius: 5px; cursor: pointer; margin-top: 1em; }
         button:hover { background-color: #0056b3; }
         .success-msg { color: green; font-weight: bold; margin-top: 1em; display: none; }
@@ -40,12 +39,6 @@
                     <label><input type="radio" name="notification_frequency" value="daily" {% if settings.notification_frequency == 'daily' or not settings.notification_frequency %}checked{% endif %}> Jednou denně (v poledne)</label>
                 </div>
                  <p class="note">Notifikace chodí v pracovní dny mezi 9:00 a 17:00.</p>
-            </div>
-
-            <div class="form-section">
-                <label for="notification_channel">ID kanálu pro notifikace o objednávkách</label>
-                <input type="text" id="notification_channel" name="notification_channel" value="{{ settings.notification_channel or '' }}" placeholder="Např. C03PC2BJMRN">
-                <p class="note">Pokud necháte pole prázdné, použije se výchozí systémový kanál.</p>
             </div>
 
             <div class="form-section">
