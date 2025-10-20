@@ -6,13 +6,15 @@ import logging
 import re
 from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
-from slack_sdk.signature import SignatureVerifier
 
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, render_template, render_template_string, abort, redirect, url_for
 
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
+
+# <--- OPRAVA č.1: PŘIDÁN CHYBĚJÍCÍ IMPORT ---
+from slack_sdk.signature import SignatureVerifier
 
 # --- INITIALIZATION ---
 app = Flask(__name__)
@@ -56,7 +58,6 @@ def save_user_settings(user_email, settings_data):
     db.collection('user_settings').document(user_email).set(settings_data, merge=True)
 
 def get_all_users_with_settings():
-    """Načte všechny Slack uživatele a jejich nastavení."""
     users_with_settings = {}
     users_ref = db.collection('users').stream()
     for user in users_ref:
@@ -92,7 +93,6 @@ def get_saved_menu_for_date(target_date):
     return menu_doc.to_dict().get('menu_items', []) if menu_doc.exists else None
 
 def get_daily_menu(target_date):
-    # This function remains unchanged
     try:
         response = requests.get(LUNCHDRIVE_URL, timeout=15)
         response.raise_for_status()
@@ -118,13 +118,11 @@ def get_daily_menu(target_date):
 # --- SLACK API & MESSAGE BUILDING ---
 
 def send_slack_message(payload):
-    # This function remains unchanged
     try:
         requests.post("https://slack.com/api/chat.postMessage", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}).raise_for_status()
     except Exception as e: app.logger.error(f"Error in send_slack_message: {e}", exc_info=True)
 
 def send_ephemeral_slack_message(channel_id, user_id, text, blocks=None):
-    # This function remains unchanged
     payload = {"channel": channel_id, "user": user_id, "text": text}
     if blocks: payload["blocks"] = blocks
     try:
@@ -132,7 +130,6 @@ def send_ephemeral_slack_message(channel_id, user_id, text, blocks=None):
     except Exception as e: app.logger.error(f"Error in send_ephemeral_slack_message: {e}", exc_info=True)
 
 def build_reminder_message_blocks(menu_items):
-    # This function remains unchanged
     menu_text = "\n".join([f"• {item}" for item in menu_items])
     return [{"type": "header", "text": {"type": "plain_text", "text": f"{random.choice(URGENT_EMOJIS)} PepeEats: Objednej oběd NA ZÍTRA!", "emoji": True}},
             {"type": "section", "text": {"type": "mrkdwn", "text": f"*Zítřejší nabídka za {TARGET_PRICE} Kč:*"}}, {"type": "divider"},
@@ -146,13 +143,13 @@ def build_reminder_message_blocks(menu_items):
                 {"type": "button", "text": {"type": "plain_text", "text": "Zrušit odběr"}, "style": "danger", "action_id": "unsubscribe"}]}]
 
 def build_order_modal_view(menu_items):
-    # This function remains unchanged
     menu_options = [{"text": {"type": "plain_text", "text": (item[:72] + '...') if len(item) > 75 else item}, "value": item} for item in menu_items]
     return {"type": "modal", "callback_id": "order_submission", "title": {"type": "plain_text", "text": "PepeEats"},
             "submit": {"type": "plain_text", "text": "Uložit"}, "close": {"type": "plain_text", "text": "Zrušit"},
             "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "Super! Co a pro koho sis dnes objednal/a?"}},
-                       {"type": "input", "block_id": "meal_selection_block", "element": {"type": "static_select", "placeholder": {"type": "plain_text", "text": "Vyber jídlo"}, "options": menu_options}, "label": {"type": "plain_text", "text": "Tvoje volba"}},
-                       {"type": "input", "block_id": "person_selection_block", "element": {"type": "users_select", "placeholder": {"type": "plain_text", "text": "Vyber kolegu"}, "action_id": "person_selection_action"}, "label": {"type": "plain_text", "text": "Objednávka je pro:"}}]}
+                       # <--- OPRAVA č.2: PŘIDÁN CHYBĚJÍCÍ action_id ---
+                       {"type": "input", "block_id": "meal_selection_block", "element": {"type": "static_select", "placeholder": {"type": "plain_text", "text": "Vyber jídlo"}, "options": menu_options, "action_id": "meal_select_action"}, "label": {"type": "plain_text", "text": "Tvoje volba"}},
+                       {"type": "input", "block_id": "person_selection_block", "element": {"type": "users_select", "placeholder": {"type": "plain_text", "text": "Vyber kolegu"}, "action_id": "person_select_action"}, "label": {"type": "plain_text", "text": "Objednávka je pro:"}}]}
 
 # --- FLASK ROUTES ---
 
@@ -208,16 +205,13 @@ def logout():
     response.set_cookie('session_token', '', expires=0, path='/')
     return response
 
-# <--- ZDE JE TA HLAVNÍ ZMĚNA ---
 @app.route('/send-daily-reminder', methods=['POST'])
 def trigger_daily_reminder():
     app.logger.info("!!! DYNAMIC REMINDER JOB STARTED !!!")
-    current_hour_prague = (datetime.utcnow().hour + 2) % 24 # UTC + 2 for Prague
+    current_hour_prague = (datetime.utcnow().hour + 2) % 24
     
     today = date.today()
-    # Job běží jen v pracovní dny, ale zprávu posílá i v neděli na pondělí
-    if today.weekday() not in [0, 1, 2, 3, 6]:
-        return "Not a reminder day (Fri/Sat).", 200
+    if today.weekday() not in [0, 1, 2, 3, 6]: return "Not a reminder day (Fri/Sat).", 200
 
     next_day = today + timedelta(days=3) if today.weekday() == 4 else today + timedelta(days=1)
     
@@ -228,8 +222,7 @@ def trigger_daily_reminder():
     save_daily_menu(next_day, menu_items)
     
     all_users = get_all_users_with_settings()
-    if not all_users:
-        return "No users found.", 200
+    if not all_users: return "No users found.", 200
 
     message_blocks = build_reminder_message_blocks(menu_items)
     users_reminded = 0
@@ -237,27 +230,19 @@ def trigger_daily_reminder():
     for user_id, data in all_users.items():
         user_data, settings = data['user_data'], data['settings']
         
-        # Ignorujeme uživatele, kteří už mají objednáno nebo mají snooze
         if check_if_user_ordered_for_date(user_id, next_day) or is_user_snoozed(user_data, next_day):
             continue
 
         send_now = False
-        # PRAVIDLO 1: Testovací uživatel dostane zprávu VŽDY
         if settings.get('is_test_user'):
             send_now = True
             app.logger.info(f"Sending to TEST USER {user_id} because test mode is ON.")
-        
-        # PRAVIDLO 2: Ostatní uživatelé dostanou zprávu podle frekvence
         else:
             freq = settings.get('notification_frequency', 'daily')
-            # Odesíláme jen v "pracovní dobu" 9-17h
             if 9 <= current_hour_prague < 17:
-                if freq == '2' and (current_hour_prague - 9) % 2 == 0:
-                    send_now = True
-                elif freq == '4' and (current_hour_prague - 9) % 4 == 0:
-                    send_now = True
-                elif freq == 'daily' and 11 <= current_hour_prague < 13: # Okno pro denní notifikaci je 11-13h
-                    send_now = True
+                if freq == '2' and (current_hour_prague - 9) % 2 == 0: send_now = True
+                elif freq == '4' and (current_hour_prague - 9) % 4 == 0: send_now = True
+                elif freq == 'daily' and 11 <= current_hour_prague < 13: send_now = True
 
         if send_now:
             send_slack_message({"channel": user_id, "blocks": message_blocks})
@@ -266,10 +251,8 @@ def trigger_daily_reminder():
     app.logger.info(f"Job finished. Dynamic reminders sent to {users_reminded} users.")
     return f"Dynamic reminders sent to {users_reminded} users.", 200
 
-# Ostatní routes zůstávají stejné
 @app.route('/slack/interactive', methods=['POST'])
 def slack_interactive_endpoint():
-    # This function remains unchanged
     payload = json.loads(request.form.get("payload"))
     user_id = payload["user"]["id"]
     today = date.today()
@@ -277,8 +260,9 @@ def slack_interactive_endpoint():
 
     if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "order_submission":
         values = payload["view"]["state"]["values"]
-        selected_meal = values["meal_selection_block"]["meal_selection_action"]["selected_option"]["value"]
-        selected_user_id = values["person_selection_block"]["person_selection_action"]["selected_user"]
+        # <--- OPRAVA č.3: SPRÁVNÝ PŘÍSTUP K HODNOTÁM ---
+        selected_meal = values["meal_selection_block"]["meal_select_action"]["selected_option"]["value"]
+        selected_user_id = values["person_selection_block"]["person_select_action"]["selected_user"]
         
         save_user_order(user_id, selected_meal, order_for, selected_user_id)
         send_slack_message({"channel": user_id, "text": f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš pro <@{selected_user_id}> objednáno: *{selected_meal}*"})
@@ -332,7 +316,6 @@ def subscribe():
 
 @app.route('/slack/oauth/callback', methods=['GET'])
 def oauth_callback():
-    # This function remains unchanged
     code = request.args.get('code')
     if not code: return "OAuth failed: No code provided.", 400
     response = requests.post("https://slack.com/api/oauth.v2.access", data={'client_id': SLACK_CLIENT_ID, 'client_secret': SLACK_CLIENT_SECRET, 'code': code, 'redirect_uri': f"{BASE_URL}/slack/oauth/callback"})
@@ -347,13 +330,11 @@ def oauth_callback():
 
 @app.route("/open-lunchdrive")
 def open_lunchdrive():
-    # This function remains unchanged
     html = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Otevřít LunchDrive…</title><style>body{font-family:system-ui,sans-serif;margin:0;padding:1.5rem;text-align:center;background-color:#f5f5f5;}.container{max-width:400px;margin:2rem auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);}h3{font-size:1.5rem;margin-top:0;}p{color:#555;}.button{display:inline-block;padding:0.8rem 1.5rem;margin-top:1rem;background-color:#007aff;color:white;text-decoration:none;border-radius:8px;font-weight:600;}.note{font-size:0.9em;color:#888;margin-top:2rem;}</style><script>(function(){var u=navigator.userAgent||"",i=/android/i.test(u),o=/iphone|ipad|ipod/i.test(u),n=Date.now(),d="https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en",a="https://apps.apple.com/cz/app/lunchdrive/id1496245341",p="cz.trueapps.lunchdrive",c="lunchdrive://open",l="intent://#Intent;package="+p+";S.browser_fallback_url="+encodeURIComponent(d)+";end";function r(e){try{window.location.href=e}catch(t){}}if(i){var t=document.createElement("iframe");t.style.display="none",document.body.appendChild(t);try{t.src=c}catch(e){}setTimeout(function(){r(l)},700),setTimeout(function(){Date.now()-n<3500&&r(d)},2400)}else o?(r(c),setTimeout(function(){Date.now()-n<2500&&r(a)},2000)):r(d)})();</script></head><body><div class="container"><h3>Pokouším se otevřít aplikaci LunchDrive…</h3><p>Pokud se aplikace neotevřela automaticky, pravděpodobně to blokuje interní prohlížeč Slacku.</p><a href="https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en" class="button">Otevřít manuálně v obchodě</a><p class="note"><b>Tip:</b> Pro nejlepší funkčnost klikněte na tři tečky (⋮) vpravo nahoře a zvolte "Otevřít v systémovém prohlížeči".</p></div></body></html>"""
     return render_template_string(html)
 
 @app.route('/admin', methods=['GET'])
 def admin_panel():
-    # This function remains unchanged
     if request.args.get('secret') != ADMIN_SECRET_KEY: abort(403)
     users_docs = db.collection('users').stream()
     users_list = [{'id': doc.id, **doc.to_dict()} for doc in users_docs]
@@ -366,4 +347,3 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-
