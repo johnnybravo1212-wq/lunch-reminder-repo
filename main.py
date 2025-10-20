@@ -390,14 +390,30 @@ def verify_firebase_token(request):
 
 @app.route('/settings')
 def settings_page():
-    """Zobrazí chráněnou stránku s nastavením."""
+    """Zobrazí chráněnou stránku s nastavením a ověří autorizaci."""
     user = verify_firebase_token(request)
     if not user:
-        # Pokud uživatel není přihlášen, přesměrujeme ho na login
+        # Uživatel není přihlášen, přesměrovat na login
         return redirect(url_for('login_page'))
-    
-    # Uživatel je ověřen, můžeme zobrazit stránku
-    return render_template('settings.html', user=user)
+
+    # --- Autorizační logika ---
+    user_email = user.get('email', '')
+    allowed_domain = '@rohlik.cz'
+    allowed_personal_email = 'johnnybravo1212@gmail.com'
+
+    if user_email.endswith(allowed_domain) or user_email == allowed_personal_email:
+        # Uživatel je autorizován, zobrazíme mu nastavení
+        app.logger.info(f"Authorized access for: {user_email}")
+        return render_template('settings.html', user=user)
+    else:
+        # Uživatel NENÍ autorizován
+        app.logger.warning(f"Unauthorized access attempt by: {user_email}")
+        return redirect(url_for('unauthorized_page'))
+
+@app.route('/unauthorized')
+def unauthorized_page():
+    """Zobrazí stránku s informací o odepření přístupu."""
+    return render_template('unauthorized.html'), 403 # 403 Forbidden je správný HTTP status
 
 @app.route('/login')
 def login_page():
@@ -423,4 +439,5 @@ if __name__ == "__main__":
     ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
     SLACK_NOTIFICATION_CHANNEL_ID = os.environ.get("SLACK_NOTIFICATION_CHANNEL_ID")
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
 
