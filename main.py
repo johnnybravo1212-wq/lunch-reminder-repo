@@ -12,8 +12,6 @@ from flask import Flask, request, jsonify, render_template, render_template_stri
 
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
-
-# <--- OPRAVA č.1: PŘIDÁN CHYBĚJÍCÍ IMPORT ---
 from slack_sdk.signature import SignatureVerifier
 
 # --- INITIALIZATION ---
@@ -34,7 +32,6 @@ BASE_URL = os.environ.get("BASE_URL")
 LUNCHDRIVE_URL = os.environ.get("LUNCHDRIVE_URL", "https://lunchdrive.cz/cs/d/3792")
 TARGET_PRICE = int(os.environ.get("TARGET_PRICE", 125))
 ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
-SLACK_NOTIFICATION_CHANNEL_ID = os.environ.get("SLACK_NOTIFICATION_CHANNEL_ID")
 
 # --- EMOJIS & IMAGES ---
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️", "🐸"]
@@ -43,13 +40,12 @@ PEPE_IMAGES = ["https://i.imgur.com/XoF6m62.png", "https://i.imgur.com/sBq2pPT.p
 # --- DATABASE & SETTINGS FUNCTIONS ---
 
 def get_user_settings(user_email):
-    default = {'notification_frequency': 'daily', 'notification_channel': '', 'is_test_user': False}
+    default = {'notification_frequency': 'daily', 'is_test_user': False}
     if not user_email: return default
     doc = db.collection('user_settings').document(user_email).get()
     if not doc.exists: return default
     settings = doc.to_dict()
     settings.setdefault('notification_frequency', 'daily')
-    settings.setdefault('notification_channel', '')
     settings.setdefault('is_test_user', False)
     return settings
 
@@ -102,13 +98,7 @@ def get_daily_menu(target_date):
         if not menu_header: return f"Menu na {target_date.strftime('%d.%m.')} ještě není k dispozici. 🙁"
         menu_table = menu_header.find_next_sibling('table', class_='table-menu')
         if not menu_table: return "Chyba: Tabulka s menu nebyla nalezena."
-        menu_items = []
-        for row in menu_table.find_all('tr'):
-            cols = row.find_all('td')
-            if len(cols) == 4 and (match := re.search(r'\d+', cols[3].get_text(strip=True))):
-                try:
-                    if int(match.group(0)) == TARGET_PRICE: menu_items.append(cols[2].get_text(strip=True))
-                except (ValueError, TypeError): continue
+        menu_items = [cols[2].get_text(strip=True) for row in menu_table.find_all('tr') if len(cols := row.find_all('td')) == 4 and (match := re.search(r'\d+', cols[3].get_text(strip=True))) and int(match.group(0)) == TARGET_PRICE]
         if not menu_items: return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
         return menu_items
     except Exception as e:
@@ -118,15 +108,13 @@ def get_daily_menu(target_date):
 # --- SLACK API & MESSAGE BUILDING ---
 
 def send_slack_message(payload):
-    try:
-        requests.post("https://slack.com/api/chat.postMessage", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}).raise_for_status()
+    try: requests.post("https://slack.com/api/chat.postMessage", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}).raise_for_status()
     except Exception as e: app.logger.error(f"Error in send_slack_message: {e}", exc_info=True)
 
 def send_ephemeral_slack_message(channel_id, user_id, text, blocks=None):
     payload = {"channel": channel_id, "user": user_id, "text": text}
     if blocks: payload["blocks"] = blocks
-    try:
-        requests.post("https://slack.com/api/chat.postEphemeral", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}).raise_for_status()
+    try: requests.post("https://slack.com/api/chat.postEphemeral", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}).raise_for_status()
     except Exception as e: app.logger.error(f"Error in send_ephemeral_slack_message: {e}", exc_info=True)
 
 def build_reminder_message_blocks(menu_items):
@@ -147,7 +135,6 @@ def build_order_modal_view(menu_items):
     return {"type": "modal", "callback_id": "order_submission", "title": {"type": "plain_text", "text": "PepeEats"},
             "submit": {"type": "plain_text", "text": "Uložit"}, "close": {"type": "plain_text", "text": "Zrušit"},
             "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "Super! Co a pro koho sis dnes objednal/a?"}},
-                       # <--- OPRAVA č.2: PŘIDÁN CHYBĚJÍCÍ action_id ---
                        {"type": "input", "block_id": "meal_selection_block", "element": {"type": "static_select", "placeholder": {"type": "plain_text", "text": "Vyber jídlo"}, "options": menu_options, "action_id": "meal_select_action"}, "label": {"type": "plain_text", "text": "Tvoje volba"}},
                        {"type": "input", "block_id": "person_selection_block", "element": {"type": "users_select", "placeholder": {"type": "plain_text", "text": "Vyber kolegu"}, "action_id": "person_select_action"}, "label": {"type": "plain_text", "text": "Objednávka je pro:"}}]}
 
@@ -185,7 +172,6 @@ def settings_page():
     if request.method == 'POST':
         settings_data = {
             'notification_frequency': request.form.get('notification_frequency'),
-            'notification_channel': request.form.get('notification_channel', '').strip(),
             'is_test_user': 'is_test_user' in request.form
         }
         save_user_settings(user_email, settings_data)
@@ -230,8 +216,7 @@ def trigger_daily_reminder():
     for user_id, data in all_users.items():
         user_data, settings = data['user_data'], data['settings']
         
-        if check_if_user_ordered_for_date(user_id, next_day) or is_user_snoozed(user_data, next_day):
-            continue
+        if check_if_user_ordered_for_date(user_id, next_day) or is_user_snoozed(user_data, next_day): continue
 
         send_now = False
         if settings.get('is_test_user'):
@@ -260,20 +245,11 @@ def slack_interactive_endpoint():
 
     if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "order_submission":
         values = payload["view"]["state"]["values"]
-        # <--- OPRAVA č.3: SPRÁVNÝ PŘÍSTUP K HODNOTÁM ---
         selected_meal = values["meal_selection_block"]["meal_select_action"]["selected_option"]["value"]
         selected_user_id = values["person_selection_block"]["person_select_action"]["selected_user"]
         
         save_user_order(user_id, selected_meal, order_for, selected_user_id)
         send_slack_message({"channel": user_id, "text": f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš pro <@{selected_user_id}> objednáno: *{selected_meal}*"})
-        
-        user_doc = db.collection('users').document(user_id).get()
-        user_email = user_doc.to_dict().get('google_email')
-        user_settings = get_user_settings(user_email)
-        notification_channel = user_settings.get('notification_channel') or SLACK_NOTIFICATION_CHANNEL_ID
-
-        if notification_channel:
-            send_slack_message({"channel": notification_channel, "text": f"Uživatel <@{user_id}> právě objednal na zítra oběd pro <@{selected_user_id}>: _{selected_meal}_"})
         
         if user_id != selected_user_id:
              send_slack_message({"channel": selected_user_id, "text": f"Ahoj! Jen abys věděl/a, <@{user_id}> ti právě objednal/a na zítra k obědu: *{selected_meal}*"})
@@ -342,6 +318,7 @@ def admin_panel():
     orders_ref = db.collection('orders').where('order_for_date', '==', today.strftime("%Y-%m-%d"))
     orders_list = [doc.to_dict() for doc in orders_ref.stream()]
     return render_template('admin.html', users=users_list, orders=orders_list, today_str=today.strftime('%Y-%m-%d'))
+
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
