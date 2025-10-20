@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>Přihlášení - PepeEats</title>
+    <style>
+        body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f9f9f9; }
+        .login-box { text-align: center; background: #fff; padding: 2em 3em; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        button { cursor: pointer; font-size: 16px; padding: 10px 20px; border-radius: 5px; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <div class="login-box">
+        <h1>🐸 PepeEats Nastavení</h1>
+        <p>Pro přístup k nastavení se prosím přihlaste.</p>
+        <button id="login-button">Přihlásit se přes Google</button>
+    </div>
+
+    <!-- Import Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <script>
+        // Vaše unikátní Firebase konfigurace
+        const firebaseConfig = {
+          apiKey: "AIzaSyBXtInE_6Zn1mCmXn-ChBLUsERg9kdtvic",
+          authDomain: "dusanice-6df4a.firebaseapp.com",
+          projectId: "dusanice-6df4a",
+          storageBucket: "dusanice-6df4a.firebasestorage.app",
+          messagingSenderId: "606124283299",
+          appId: "1:606124283299:web:1e0230edd39a15278a7616"
+        };
+
+        // Inicializace Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+
+        document.getElementById('login-button').addEventListener('click', () => {
+            const provider = new firebase.auth.GoogleAuthProvider();
+            auth.signInWithPopup(provider)
+                .then((result) => {
+                    // Uživatel se úspěšně přihlásil
+                    return result.user.getIdToken();
+                })
+                .then((idToken) => {
+                    // Uložíme token do cookie, která platí 1 hodinu
+                    document.cookie = `session_token=${idToken}; path=/; max-age=3600`;
+                    // Přesměrujeme na stránku s nastavením
+                    window.location.href = '/settings';
+                })
+                .catch((error) => {
+                    console.error("Chyba při přihlašování: ", error);
+                    alert("Došlo k chybě při přihlašování.");
+                });
+        });
+    </script>
+</body>
+</html>
