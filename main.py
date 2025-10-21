@@ -190,7 +190,6 @@ def settings_page():
     is_subscribed = db.collection('users').document(slack_id).get().exists if slack_id else False
 
     if is_subscribed:
-        # Pokud je uživatel přihlášen, můžeme propojit účty
         db.collection('users').document(slack_id).set({'google_email': user_email}, merge=True)
     
     if request.method == 'POST':
@@ -256,26 +255,33 @@ def trigger_daily_reminder():
 def slack_interactive_endpoint():
     payload = json.loads(request.form.get("payload"))
     user_id = payload["user"]["id"]
-    channel_id = payload["channel"]["id"]
-    trigger_id = payload.get("trigger_id")
     today = date.today()
     order_for = today + timedelta(days=3) if today.weekday() == 4 else today + timedelta(days=1)
-    if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "feedback_submission":
-        feedback_text = payload["view"]["state"]["values"]["feedback_block"]["feedback_input"]["value"]
-        db.collection("feedback").add({ "text": feedback_text, "user_id": user_id, "submitted_at": firestore.SERVER_TIMESTAMP })
-        send_ephemeral_slack_message(channel_id, user_id, "Díky za zpětnou vazbu! Uložil jsem si to. 🐸")
-        return ("", 200)
-    if payload["type"] == "view_submission" and payload["view"]["callback_id"] == "order_submission":
-        values = payload["view"]["state"]["values"]
-        selected_meal = values["meal_selection_block"]["meal_select_action"]["selected_option"]["value"]
-        selected_user_id = values["person_selection_block"]["person_select_action"]["selected_user"]
-        save_user_order(user_id, selected_meal, order_for, selected_user_id)
-        send_slack_message({"channel": user_id, "text": f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš pro <@{selected_user_id}> objednáno: *{selected_meal}*"})
-        if user_id != selected_user_id:
-             send_slack_message({"channel": selected_user_id, "text": f"Ahoj! Jen abys věděl/a, <@{user_id}> ti právě objednal/a na zítra k obědu: *{selected_meal}*"})
-        return ("", 200)
+    
+    if payload["type"] == "view_submission":
+        if payload["view"]["callback_id"] == "feedback_submission":
+            feedback_text = payload["view"]["state"]["values"]["feedback_block"]["feedback_input"]["value"]
+            db.collection("feedback").add({ "text": feedback_text, "user_id": user_id, "submitted_at": firestore.SERVER_TIMESTAMP })
+            # Zde neposíláme zprávu, protože modal se zavře a není kam ji poslat jako ephemeral
+            return ("", 200)
+
+        if payload["view"]["callback_id"] == "order_submission":
+            values = payload["view"]["state"]["values"]
+            selected_meal = values["meal_selection_block"]["meal_select_action"]["selected_option"]["value"]
+            selected_user_id = values["person_selection_block"]["person_select_action"]["selected_user"]
+            save_user_order(user_id, selected_meal, order_for, selected_user_id)
+            send_slack_message({"channel": user_id, "text": f"Díky! Uložil jsem, že na {order_for.strftime('%d.%m.')} máš pro <@{selected_user_id}> objednáno: *{selected_meal}*"})
+            if user_id != selected_user_id:
+                 send_slack_message({"channel": selected_user_id, "text": f"Ahoj! Jen abys věděl/a, <@{user_id}> ti právě objednal/a na zítra k obědu: *{selected_meal}*"})
+            return ("", 200)
+
     if payload["type"] == "block_actions":
+        # --- ZDE JE TA OPRAVA ---
+        # Tyto proměnné definujeme až zde, protože payload z view_submission neobsahuje 'channel'
+        channel_id = payload["channel"]["id"]
+        trigger_id = payload.get("trigger_id")
         action_id = payload["actions"][0].get("action_id")
+
         if action_id == "check_balance":
             year, month = today.year, today.month
             workdays = calculate_workdays(year, month)
@@ -308,7 +314,9 @@ def slack_interactive_endpoint():
         elif action_id == "unsubscribe":
             db.collection('users').document(user_id).delete()
             send_slack_message({"channel": user_id, "text": "Je mi to líto, ale zrušil jsem ti odběr. 🐸"})
+        
         return ("", 200)
+
     return ("Unhandled interaction", 200)
 
 @app.route('/subscribe')
@@ -325,7 +333,6 @@ def oauth_callback():
     user_id = data.get('authed_user', {}).get('id')
     if user_id:
         db.collection('users').document(user_id).set({'subscribed_at': firestore.SERVER_TIMESTAMP}, merge=True)
-        # Po úspěšném přidání přesměrujeme zpět na nastavení
         return redirect(url_for('settings_page'))
     return "OAuth failed: Could not get user ID.", 500
 
