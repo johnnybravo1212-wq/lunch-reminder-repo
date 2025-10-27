@@ -8,6 +8,9 @@ from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
 import calendar
 
+# --- ZMĚNA: Nový import pro svátky ---
+import holidays
+
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, render_template, render_template_string, abort, redirect, url_for
 
@@ -23,6 +26,9 @@ try:
 except Exception as e:
     app.logger.warning(f"Firebase already initialized or failed: {e}")
 db = firestore.client()
+
+# --- ZMĚNA: Vytvoření instance českých svátků ---
+cz_holidays = holidays.CZ()
 
 # --- CONFIGURATION ---
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
@@ -220,18 +226,29 @@ def logout():
 def trigger_daily_reminder():
     app.logger.info("!!! DYNAMIC REMINDER JOB STARTED !!!")
     current_hour_prague = (datetime.utcnow().hour + 2) % 24
+    
     today = date.today()
     if today.weekday() not in [0, 1, 2, 3, 6]: return "Not a reminder day (Fri/Sat).", 200
+
     next_day = today + timedelta(days=3) if today.weekday() == 4 else today + timedelta(days=1)
+    
+    # --- ZMĚNA: Kontrola svátků ---
+    if next_day in cz_holidays:
+        app.logger.info(f"Next day {next_day} is a public holiday. No reminders will be sent.")
+        return f"Next day ({next_day}) is a public holiday.", 200
+
     menu_items = get_saved_menu_for_date(next_day) or get_daily_menu(next_day)
     if isinstance(menu_items, str):
         app.logger.error(f"Could not get menu: {menu_items}")
         return menu_items, 500
     save_daily_menu(next_day, menu_items)
+    
     all_users = get_all_users_with_settings()
     if not all_users: return "No users found.", 200
+
     message_blocks = build_reminder_message_blocks(menu_items)
     users_reminded = 0
+
     for user_id, data in all_users.items():
         user_data, settings = data['user_data'], data['settings']
         if check_if_user_ordered_for_date(user_id, next_day) or is_user_snoozed(user_data, next_day): continue
@@ -262,7 +279,6 @@ def slack_interactive_endpoint():
         if payload["view"]["callback_id"] == "feedback_submission":
             feedback_text = payload["view"]["state"]["values"]["feedback_block"]["feedback_input"]["value"]
             db.collection("feedback").add({ "text": feedback_text, "user_id": user_id, "submitted_at": firestore.SERVER_TIMESTAMP })
-            # Zde neposíláme zprávu, protože modal se zavře a není kam ji poslat jako ephemeral
             return ("", 200)
 
         if payload["view"]["callback_id"] == "order_submission":
@@ -276,8 +292,6 @@ def slack_interactive_endpoint():
             return ("", 200)
 
     if payload["type"] == "block_actions":
-        # --- ZDE JE TA OPRAVA ---
-        # Tyto proměnné definujeme až zde, protože payload z view_submission neobsahuje 'channel'
         channel_id = payload["channel"]["id"]
         trigger_id = payload.get("trigger_id")
         action_id = payload["actions"][0].get("action_id")
