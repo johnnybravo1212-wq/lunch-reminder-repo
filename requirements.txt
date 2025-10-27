@@ -1,3 +1,4 @@
+holidays
 # Flask is our web framework
 Flask==3.0.3
 
@@ -24,4 +25,5 @@ slack-sdk==3.27.0
 
 # A robust HTML and XML parser
 lxml==5.2.2
+
 
