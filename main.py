@@ -312,9 +312,9 @@ def slack_interactive_endpoint():
             feedback_modal = {
                 "type": "modal",
                 "callback_id": "feedback_submission",
-                "title": {"type": "plain_text", "text": "Zpětná vazba pro PepeEats"},
+                # --- ZMĚNA: Titulek zkrácen pod 24 znaků ---
+                "title": {"type": "plain_text", "text": "Feedback pro PepeEats"},
                 "submit": {"type": "plain_text", "text": "Odeslat"},
-                # --- ZMĚNA: Přidáno chybějící tlačítko "Zrušit" ---
                 "close": {"type": "plain_text", "text": "Zrušit"},
                 "blocks": [{
                     "type": "input",
@@ -328,7 +328,7 @@ def slack_interactive_endpoint():
                 }]
             }
             try:
-                # Tento kód už je v pořádku a není třeba ho měnit
+                # Tento kód je v pořádku, není třeba ho měnit
                 response = requests.post(
                     "https://slack.com/api/views.open",
                     json={"trigger_id": trigger_id, "view": feedback_modal},
@@ -402,5 +402,6 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
 
 
