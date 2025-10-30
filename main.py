@@ -153,6 +153,7 @@ def build_reminder_message_blocks(menu_items):
         {"type": "divider"},
         {"type": "actions", "elements": [
             {"type": "button", "text": {"type": "plain_text", "text": "✅ Mám objednáno"}, "style": "primary", "action_id": "open_order_modal"},
+            {"type": "button", "text": {"type": "plain_text", "text": "Dnes neobjednávám"}, "style": "danger", "action_id": "snooze_today"},
             {"type": "button", "text": {"type": "plain_text", "text": "💰 Kolik zbývá?"}, "action_id": "check_balance"},
             {"type": "button", "text": {"type": "plain_text", "text": "Chybí ti funkce?"}, "action_id": "open_feedback_modal"}
         ]},
@@ -311,7 +312,21 @@ def slack_interactive_endpoint():
             feedback_modal = { "type": "modal", "callback_id": "feedback_submission", "title": {"type": "plain_text", "text": "Zpětná vazba pro PepeEats"}, "submit": {"type": "plain_text", "text": "Odeslat"},
                 "blocks": [{"type": "input", "block_id": "feedback_block", "label": {"type": "plain_text", "text": "Co bys vylepšil/a nebo přidal/a?"},
                             "element": {"type": "plain_text_input", "action_id": "feedback_input", "multiline": True}}]}
-            requests.post("https://slack.com/api/views.open", json={"trigger_id": trigger_id, "view": feedback_modal}, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
+            try:
+                # --- ZMĚNA: Přidána kontrola odpovědi od Slacku ---
+                response = requests.post(
+                    "https://slack.com/api/views.open",
+                    json={"trigger_id": trigger_id, "view": feedback_modal},
+                    headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}
+                )
+                response.raise_for_status()
+                response_data = response.json()
+                if not response_data.get("ok"):
+                    app.logger.error(f"Error opening feedback modal: {response_data.get('error')}")
+                    send_ephemeral_slack_message(channel_id, user_id, f"Jejda, nepodařilo se mi otevřít okno pro feedback. Chyba: `{response_data.get('error')}`")
+            except requests.exceptions.RequestException as e:
+                app.logger.error(f"HTTP Error opening feedback modal: {e}")
+                send_ephemeral_slack_message(channel_id, user_id, "Jejda, nepodařilo se mi otevřít okno pro feedback kvůli chybě v síťové komunikaci.")        
         elif action_id in ["open_order_modal", "ho_order_for_other"]:
             menu = get_saved_menu_for_date(order_for) or get_daily_menu(order_for)
             if isinstance(menu, str): send_ephemeral_slack_message(channel_id, user_id, "Chyba: Nepodařilo se načíst menu.")
@@ -372,3 +387,4 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
