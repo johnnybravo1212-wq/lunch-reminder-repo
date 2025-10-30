@@ -309,11 +309,26 @@ def slack_interactive_endpoint():
                     f"• Zbývá: *{total_budget - spent} Kč*")
             send_ephemeral_slack_message(channel_id, user_id, text)
         elif action_id == "open_feedback_modal":
-            feedback_modal = { "type": "modal", "callback_id": "feedback_submission", "title": {"type": "plain_text", "text": "Zpětná vazba pro PepeEats"}, "submit": {"type": "plain_text", "text": "Odeslat"},
-                "blocks": [{"type": "input", "block_id": "feedback_block", "label": {"type": "plain_text", "text": "Co bys vylepšil/a nebo přidal/a?"},
-                            "element": {"type": "plain_text_input", "action_id": "feedback_input", "multiline": True}}]}
+            feedback_modal = {
+                "type": "modal",
+                "callback_id": "feedback_submission",
+                "title": {"type": "plain_text", "text": "Zpětná vazba pro PepeEats"},
+                "submit": {"type": "plain_text", "text": "Odeslat"},
+                # --- ZMĚNA: Přidáno chybějící tlačítko "Zrušit" ---
+                "close": {"type": "plain_text", "text": "Zrušit"},
+                "blocks": [{
+                    "type": "input",
+                    "block_id": "feedback_block",
+                    "label": {"type": "plain_text", "text": "Co bys vylepšil/a nebo přidal/a?"},
+                    "element": {
+                        "type": "plain_text_input",
+                        "action_id": "feedback_input",
+                        "multiline": True
+                    }
+                }]
+            }
             try:
-                # --- ZMĚNA: Přidána kontrola odpovědi od Slacku ---
+                # Tento kód už je v pořádku a není třeba ho měnit
                 response = requests.post(
                     "https://slack.com/api/views.open",
                     json={"trigger_id": trigger_id, "view": feedback_modal},
@@ -387,4 +402,5 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
+
 
