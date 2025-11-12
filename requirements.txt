@@ -30,4 +30,5 @@ lxml==5.2.2
 # DuckDuckGo search for fetching food images without API keys
 duckduckgo-search==4.4.3
 
-
+# Google Translate for translating Czech dish names to English
+googletrans==4.0.0rc1
