@@ -4,6 +4,7 @@ import requests
 import random
 import logging
 import re
+import time
 from datetime import datetime, timedelta, date
 from urllib.parse import urlencode
 import calendar
@@ -41,6 +42,9 @@ LUNCHDRIVE_URL = os.environ.get("LUNCHDRIVE_URL", "https://lunchdrive.cz/cs/d/37
 TARGET_PRICE = int(os.environ.get("TARGET_PRICE", 125))
 ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
 OWNER_SLACK_ID = os.environ.get("OWNER_SLACK_ID")  # Your Slack user ID for feedback notifications
+GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID")  # Google Custom Search Engine ID
+GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY")  # Google API Key
+USE_GOOGLE_SEARCH = os.environ.get("USE_GOOGLE_SEARCH", "false").lower() == "true"  # Toggle between DuckDuckGo and Google
 
 # --- EMOJIS & IMAGES ---
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️", "🐸"]
@@ -270,11 +274,49 @@ def get_slack_id_from_email(email):
         app.logger.error(f"Failed to lookup user by email {email}: {e}")
     return None
 
-def search_food_image(dish_name):
+def search_food_image_google(dish_name):
+    """Search Google Custom Search for food image and return first result URL"""
+    try:
+        if not GOOGLE_CSE_ID or not GOOGLE_CSE_API_KEY:
+            app.logger.error("Google Custom Search not configured (missing CSE_ID or API_KEY)")
+            return None
+
+        search_query = f"{dish_name} jídlo food"
+        url = "https://www.googleapis.com/customsearch/v1"
+
+        params = {
+            'key': GOOGLE_CSE_API_KEY,
+            'cx': GOOGLE_CSE_ID,
+            'q': search_query,
+            'searchType': 'image',
+            'num': 1,
+            'safe': 'active'
+        }
+
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if 'items' in data and len(data['items']) > 0:
+            image_url = data['items'][0].get('link')
+            app.logger.info(f"Found image (Google) for '{dish_name}': {image_url}")
+            return image_url
+        else:
+            app.logger.warning(f"No image found (Google) for '{dish_name}'")
+            return None
+
+    except Exception as e:
+        app.logger.error(f"Error searching Google for image of '{dish_name}': {e}", exc_info=True)
+        return None
+
+def search_food_image_duckduckgo(dish_name):
     """Search DuckDuckGo for food image and return first result URL"""
     try:
         # Clean up dish name for better search results
         search_query = f"{dish_name} jídlo food"
+
+        # Add delay to avoid rate limiting (2-4 seconds random)
+        time.sleep(random.uniform(2, 4))
 
         with DDGS() as ddgs:
             results = list(ddgs.images(
@@ -286,15 +328,23 @@ def search_food_image(dish_name):
 
             if results and len(results) > 0:
                 image_url = results[0].get('image')
-                app.logger.info(f"Found image for '{dish_name}': {image_url}")
+                app.logger.info(f"Found image (DuckDuckGo) for '{dish_name}': {image_url}")
                 return image_url
             else:
-                app.logger.warning(f"No image found for '{dish_name}'")
+                app.logger.warning(f"No image found (DuckDuckGo) for '{dish_name}'")
                 return None
 
     except Exception as e:
-        app.logger.error(f"Error searching for image of '{dish_name}': {e}", exc_info=True)
+        app.logger.error(f"Error searching DuckDuckGo for image of '{dish_name}': {e}", exc_info=True)
+        # If rate limited, return None instead of crashing
         return None
+
+def search_food_image(dish_name):
+    """Search for food image using configured provider (Google or DuckDuckGo)"""
+    if USE_GOOGLE_SEARCH:
+        return search_food_image_google(dish_name)
+    else:
+        return search_food_image_duckduckgo(dish_name)
 
 def get_or_cache_dish_image(dish_name):
     """Get cached image URL or search and cache if not found"""
