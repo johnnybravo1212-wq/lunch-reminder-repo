@@ -15,6 +15,7 @@ import holidays
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, render_template, render_template_string, abort, redirect, url_for
 from duckduckgo_search import DDGS
+from googletrans import Translator
 
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
@@ -28,6 +29,9 @@ try:
 except Exception as e:
     app.logger.warning(f"Firebase already initialized or failed: {e}")
 db = firestore.client()
+
+# Initialize Google Translator
+translator = Translator()
 
 # --- ZMĚNA: Vytvoření instance českých svátků ---
 cz_holidays = holidays.CZ()
@@ -287,6 +291,27 @@ def clean_dish_name_for_search(dish_name):
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned
 
+def translate_to_english(text):
+    """Translate Czech text to English using Google Translate"""
+    try:
+        # Detect if already English (skip translation)
+        detection = translator.detect(text)
+        if detection.lang == 'en':
+            app.logger.info(f"[DEBUG] Text already in English: '{text}'")
+            return text
+
+        # Translate to English
+        translation = translator.translate(text, src='cs', dest='en')
+        translated_text = translation.text
+
+        app.logger.info(f"[DEBUG] Translated '{text}' → '{translated_text}'")
+        return translated_text
+
+    except Exception as e:
+        app.logger.error(f"Translation failed for '{text}': {e}")
+        # Fallback: return original text
+        return text
+
 def search_food_image_unsplash(dish_name):
     """Search Unsplash for food image and return first result URL"""
     try:
@@ -297,9 +322,12 @@ def search_food_image_unsplash(dish_name):
         # Clean dish name before searching
         cleaned_name = clean_dish_name_for_search(dish_name)
 
-        # Build search query - just the dish name + "food"
-        search_query = f"{cleaned_name} food"
-        app.logger.info(f"[DEBUG] Unsplash search query: '{dish_name}' → '{search_query}'")
+        # Translate to English for better Unsplash results
+        english_name = translate_to_english(cleaned_name)
+
+        # Build search query - translated dish name + "food dish"
+        search_query = f"{english_name} food dish"
+        app.logger.info(f"[DEBUG] Unsplash search query: '{dish_name}' → '{cleaned_name}' → '{english_name}' → '{search_query}'")
 
         url = "https://api.unsplash.com/search/photos"
 
