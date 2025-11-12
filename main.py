@@ -13,6 +13,7 @@ import holidays
 
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, render_template, render_template_string, abort, redirect, url_for
+from duckduckgo_search import DDGS
 
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
@@ -39,10 +40,37 @@ BASE_URL = os.environ.get("BASE_URL")
 LUNCHDRIVE_URL = os.environ.get("LUNCHDRIVE_URL", "https://lunchdrive.cz/cs/d/3792")
 TARGET_PRICE = int(os.environ.get("TARGET_PRICE", 125))
 ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
+OWNER_SLACK_ID = os.environ.get("OWNER_SLACK_ID")  # Your Slack user ID for feedback notifications
 
 # --- EMOJIS & IMAGES ---
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️", "🐸"]
 PEPE_IMAGES = ["https://i.imgur.com/XoF6m62.png", "https://i.imgur.com/sBq2pPT.png", "https://i.imgur.com/2OFa0s8.png"]
+
+# --- RATING REACTIONS ---
+RATING_REACTIONS = {
+    'high': [  # 80-100%
+        "Parádní volba! Minule {rating}% 🌟",
+        "Tohle ti chutnalo! ({rating}%) 😋",
+        "Tvůj favorit! Minule {rating}% ⭐",
+        "Safe bet! Minule {rating}% 👍"
+    ],
+    'medium': [  # 50-79%
+        "Bylo to OK ({rating}%). Zkusíš znovu? 🤔",
+        "Ujde to... Minule {rating}% 😐",
+        "Průměr ({rating}%). Možná tentokrát bude lepší? 🤷",
+    ],
+    'low': [  # 0-49%
+        "Minule jen {rating}%... Jsi si jistý/á? 😬",
+        "Tak tohle ti nechutnalo ({rating}%) 😅",
+        "Odvážná volba! Minule {rating}% 🫣",
+        "Dáš tomu druhou šanci? Minule {rating}% 🙈"
+    ],
+    'multiple': [
+        "Objednáváš to už {count}x! 🔥",
+        "{count}x objednáno. Fanda? 😄",
+        "Toto máš rád/a! ({count}x) ❤️"
+    ]
+}
 
 # --- DATABASE & HELPER FUNCTIONS ---
 
@@ -70,7 +98,16 @@ def get_all_users_with_settings():
     return users_with_settings
 
 def save_user_order(ordered_by_id, meal_choice, order_for_date, ordered_for_id):
-    order_data = {'ordered_by_user_id': ordered_by_id, 'meal_description': meal_choice, 'ordered_for_user_id': ordered_for_id, 'order_for_date': order_for_date.strftime("%Y-%m-%d"), 'placed_on_date': date.today().strftime("%Y-%m-%d"), 'price': 125 }
+    order_data = {
+        'ordered_by_user_id': ordered_by_id,
+        'meal_description': meal_choice,
+        'ordered_for_user_id': ordered_for_id,
+        'order_for_date': order_for_date.strftime("%Y-%m-%d"),
+        'placed_on_date': date.today().strftime("%Y-%m-%d"),
+        'price': 125,
+        'rating': None,
+        'rated_at': None
+    }
     doc_id = f"{ordered_by_id}_{ordered_for_id}_{order_for_date.strftime('%Y-%m-%d')}"
     db.collection('orders').document(doc_id).set(order_data)
     db.collection('users').document(ordered_by_id).set({'snoozed_until': None}, merge=True)
@@ -78,6 +115,91 @@ def save_user_order(ordered_by_id, meal_choice, order_for_date, ordered_for_id):
 def check_if_user_ordered_for_date(user_id, target_date):
     query = db.collection('orders').where('order_for_date', '==', target_date.strftime("%Y-%m-%d")).where('ordered_by_user_id', '==', user_id)
     return len(list(query.stream())) > 0
+
+def get_user_dish_history(user_id, dish_name):
+    """Get user's previous orders and ratings for a specific dish"""
+    try:
+        # Normalize dish name for comparison
+        normalized_dish = dish_name.strip().lower()
+
+        orders_ref = db.collection('orders').where('ordered_for_user_id', '==', user_id).stream()
+
+        matching_orders = []
+        for order in orders_ref:
+            order_data = order.to_dict()
+            meal_desc = order_data.get('meal_description', '').strip().lower()
+
+            if meal_desc == normalized_dish:
+                matching_orders.append({
+                    'date': order_data.get('order_for_date'),
+                    'rating': order_data.get('rating'),
+                    'meal_description': order_data.get('meal_description')
+                })
+
+        return matching_orders
+    except Exception as e:
+        app.logger.error(f"Error getting dish history for {user_id}: {e}")
+        return []
+
+def save_rating(user_id, order_date, rating_value):
+    """Save rating for user's order on a specific date"""
+    try:
+        # Find the order for this user and date
+        query = db.collection('orders').where('ordered_for_user_id', '==', user_id).where('order_for_date', '==', order_date.strftime("%Y-%m-%d"))
+        orders = list(query.stream())
+
+        if orders:
+            order_doc = orders[0]
+            order_doc.reference.update({
+                'rating': rating_value,
+                'rated_at': firestore.SERVER_TIMESTAMP
+            })
+            app.logger.info(f"Saved rating {rating_value} for user {user_id} on {order_date}")
+            return True
+        else:
+            app.logger.warning(f"No order found for user {user_id} on {order_date}")
+            return False
+    except Exception as e:
+        app.logger.error(f"Error saving rating: {e}")
+        return False
+
+def get_orders_needing_ratings(target_date):
+    """Get all orders for a specific date that haven't been rated yet"""
+    try:
+        query = db.collection('orders').where('order_for_date', '==', target_date.strftime("%Y-%m-%d")).where('rating', '==', None)
+        return list(query.stream())
+    except Exception as e:
+        app.logger.error(f"Error getting orders needing ratings: {e}")
+        return []
+
+def generate_dish_comment(dish_history):
+    """Generate funny comment based on user's history with this dish"""
+    if not dish_history:
+        return None
+
+    order_count = len(dish_history)
+    rated_orders = [o for o in dish_history if o.get('rating') is not None]
+
+    # If ordered multiple times, prioritize that
+    if order_count >= 3:
+        return random.choice(RATING_REACTIONS['multiple']).format(count=order_count)
+
+    # If has rating from last time
+    if rated_orders:
+        last_rating = rated_orders[-1].get('rating')
+
+        if last_rating >= 80:
+            return random.choice(RATING_REACTIONS['high']).format(rating=last_rating)
+        elif last_rating >= 50:
+            return random.choice(RATING_REACTIONS['medium']).format(rating=last_rating)
+        else:
+            return random.choice(RATING_REACTIONS['low']).format(rating=last_rating)
+
+    # Ordered before but never rated
+    if order_count >= 2:
+        return random.choice(RATING_REACTIONS['multiple']).format(count=order_count)
+
+    return None
 
 def is_user_snoozed(user_data, check_date):
     snoozed_until_str = user_data.get('snoozed_until')
@@ -102,8 +224,20 @@ def get_daily_menu(target_date):
         if not menu_header: return f"Menu na {target_date.strftime('%d.%m.')} ještě není k dispozici. 🙁"
         menu_table = menu_header.find_next_sibling('table', class_='table-menu')
         if not menu_table: return "Chyba: Tabulka s menu nebyla nalezena."
-        menu_items = [cols[2].get_text(strip=True) for row in menu_table.find_all('tr') if len(cols := row.find_all('td')) == 4 and (match := re.search(r'\d+', cols[3].get_text(strip=True))) and int(match.group(0)) == TARGET_PRICE]
-        if not menu_items: return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
+
+        # Get dish names
+        dish_names = [cols[2].get_text(strip=True) for row in menu_table.find_all('tr') if len(cols := row.find_all('td')) == 4 and (match := re.search(r'\d+', cols[3].get_text(strip=True))) and int(match.group(0)) == TARGET_PRICE]
+        if not dish_names: return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
+
+        # Fetch images for each dish
+        menu_items = []
+        for dish_name in dish_names:
+            image_url = get_or_cache_dish_image(dish_name)
+            menu_items.append({
+                'name': dish_name,
+                'image_url': image_url
+            })
+
         return menu_items
     except Exception as e:
         app.logger.error(f"CRITICAL ERROR in get_daily_menu: {e}", exc_info=True)
@@ -130,6 +264,68 @@ def get_slack_id_from_email(email):
         app.logger.error(f"Failed to lookup user by email {email}: {e}")
     return None
 
+def search_food_image(dish_name):
+    """Search DuckDuckGo for food image and return first result URL"""
+    try:
+        # Clean up dish name for better search results
+        search_query = f"{dish_name} jídlo food"
+
+        with DDGS() as ddgs:
+            results = list(ddgs.images(
+                keywords=search_query,
+                region='cz-cs',
+                safesearch='moderate',
+                max_results=1
+            ))
+
+            if results and len(results) > 0:
+                image_url = results[0].get('image')
+                app.logger.info(f"Found image for '{dish_name}': {image_url}")
+                return image_url
+            else:
+                app.logger.warning(f"No image found for '{dish_name}'")
+                return None
+
+    except Exception as e:
+        app.logger.error(f"Error searching for image of '{dish_name}': {e}", exc_info=True)
+        return None
+
+def get_or_cache_dish_image(dish_name):
+    """Get cached image URL or search and cache if not found"""
+    if not dish_name:
+        return None
+
+    # Normalize dish name for consistent caching
+    normalized_name = dish_name.strip().lower()
+
+    # Check cache first
+    try:
+        cache_doc = db.collection('dish_images').document(normalized_name).get()
+        if cache_doc.exists:
+            cached_data = cache_doc.to_dict()
+            image_url = cached_data.get('image_url')
+            app.logger.info(f"Using cached image for '{dish_name}'")
+            return image_url
+    except Exception as e:
+        app.logger.error(f"Error reading image cache for '{dish_name}': {e}")
+
+    # Not in cache, search for it
+    image_url = search_food_image(dish_name)
+
+    # Cache the result (even if None, to avoid repeated failed searches)
+    if image_url:
+        try:
+            db.collection('dish_images').document(normalized_name).set({
+                'image_url': image_url,
+                'dish_name_original': dish_name,
+                'last_updated': firestore.SERVER_TIMESTAMP
+            })
+            app.logger.info(f"Cached image for '{dish_name}'")
+        except Exception as e:
+            app.logger.error(f"Error caching image for '{dish_name}': {e}")
+
+    return image_url
+
 # --- SLACK API & MESSAGE BUILDING ---
 
 def send_slack_message(payload):
@@ -142,13 +338,47 @@ def send_ephemeral_slack_message(channel_id, user_id, text, blocks=None):
     try: requests.post("https://slack.com/api/chat.postEphemeral", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}).raise_for_status()
     except Exception as e: app.logger.error(f"Error in send_ephemeral_slack_message: {e}", exc_info=True)
 
-def build_reminder_message_blocks(menu_items):
-    menu_text = "\n".join([f"• {item}" for item in menu_items])
+def build_reminder_message_blocks(menu_items, user_id=None):
     settings_url = f"{BASE_URL}/settings"
-    return [
+
+    blocks = [
         {"type": "header", "text": {"type": "plain_text", "text": f"{random.choice(URGENT_EMOJIS)} PepeEats: Objednej oběd NA ZÍTRA!", "emoji": True}},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"*Zítřejší nabídka za {TARGET_PRICE} Kč:*"}},
-        {"type": "divider"}, {"type": "section", "text": {"type": "mrkdwn", "text": menu_text}},
+        {"type": "divider"}
+    ]
+
+    # Add each menu item with its image
+    for item in menu_items:
+        dish_name = item.get('name', item) if isinstance(item, dict) else item
+        image_url = item.get('image_url') if isinstance(item, dict) else None
+
+        # Check user's history with this dish
+        comment = None
+        if user_id:
+            dish_history = get_user_dish_history(user_id, dish_name)
+            comment = generate_dish_comment(dish_history)
+
+        # Build dish text with optional comment
+        dish_text = f"• *{dish_name}*"
+        if comment:
+            dish_text += f"\n   _{comment}_"
+
+        blocks.append({
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": dish_text}
+        })
+
+        # Add image if available
+        if image_url:
+            blocks.append({
+                "type": "image",
+                "image_url": image_url,
+                "alt_text": dish_name
+            })
+
+    # Add Pepe image and rest of the message
+    blocks.extend([
+        {"type": "divider"},
         {"type": "image", "image_url": random.choice(PEPE_IMAGES), "alt_text": "A wild Pepe appears"},
         {"type": "divider"},
         {"type": "actions", "elements": [
@@ -160,10 +390,21 @@ def build_reminder_message_blocks(menu_items):
         {"type": "context", "elements": [
             {"type": "mrkdwn", "text": f"🕒 Nevyhovuje čas? <{settings_url}|Změň si nastavení>"}
         ]}
-    ]
+    ])
+
+    return blocks
 
 def build_order_modal_view(menu_items):
-    menu_options = [{"text": {"type": "plain_text", "text": (item[:72] + '...') if len(item) > 75 else item}, "value": item} for item in menu_items]
+    # Handle both old format (list of strings) and new format (list of dicts)
+    menu_options = []
+    for item in menu_items:
+        dish_name = item.get('name', item) if isinstance(item, dict) else item
+        display_text = (dish_name[:72] + '...') if len(dish_name) > 75 else dish_name
+        menu_options.append({
+            "text": {"type": "plain_text", "text": display_text},
+            "value": dish_name
+        })
+
     return {"type": "modal", "callback_id": "order_submission", "title": {"type": "plain_text", "text": "PepeEats"},
             "submit": {"type": "plain_text", "text": "Uložit"}, "close": {"type": "plain_text", "text": "Zrušit"},
             "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": "Super! Co a pro koho sis dnes objednal/a?"}},
@@ -247,7 +488,6 @@ def trigger_daily_reminder():
     all_users = get_all_users_with_settings()
     if not all_users: return "No users found.", 200
 
-    message_blocks = build_reminder_message_blocks(menu_items)
     users_reminded = 0
 
     for user_id, data in all_users.items():
@@ -264,10 +504,92 @@ def trigger_daily_reminder():
                 elif freq == '4' and (current_hour_prague - 9) % 4 == 0: send_now = True
                 elif freq == 'daily' and 11 <= current_hour_prague < 13: send_now = True
         if send_now:
+            # Build personalized message blocks for each user
+            message_blocks = build_reminder_message_blocks(menu_items, user_id=user_id)
             send_slack_message({"channel": user_id, "blocks": message_blocks})
             users_reminded += 1
     app.logger.info(f"Job finished. Dynamic reminders sent to {users_reminded} users.")
     return f"Dynamic reminders sent to {users_reminded} users.", 200
+
+@app.route('/send-rating-requests', methods=['POST'])
+def trigger_rating_requests():
+    """Send rating requests to users who ordered lunch today"""
+    app.logger.info("!!! RATING REQUEST JOB STARTED !!!")
+
+    today = date.today()
+
+    # Don't send on weekends or holidays
+    if today.weekday() >= 5 or today in cz_holidays:
+        app.logger.info(f"Today is weekend or holiday. No rating requests.")
+        return "Weekend or holiday - no rating requests.", 200
+
+    # Get all orders for today that need ratings
+    orders_to_rate = get_orders_needing_ratings(today)
+
+    if not orders_to_rate:
+        app.logger.info("No orders needing ratings today.")
+        return "No orders needing ratings.", 200
+
+    ratings_sent = 0
+
+    for order_doc in orders_to_rate:
+        order_data = order_doc.to_dict()
+        user_id = order_data.get('ordered_for_user_id')
+        meal_desc = order_data.get('meal_description', 'tvoje jídlo')
+
+        if not user_id:
+            continue
+
+        # Build rating request message
+        blocks = [
+            {
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"Jak ti dnes chutnalo *{meal_desc}*? 🍽️"
+                }
+            },
+            {
+                "type": "actions",
+                "block_id": f"rating_block_{today.strftime('%Y-%m-%d')}",
+                "elements": [
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "💯 Vynikající"},
+                        "value": "100",
+                        "action_id": "rate_meal_100"
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "👍 Dobré"},
+                        "value": "75",
+                        "action_id": "rate_meal_75"
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "😐 Ujde"},
+                        "value": "50",
+                        "action_id": "rate_meal_50"
+                    },
+                    {
+                        "type": "button",
+                        "text": {"type": "plain_text", "text": "👎 Slabé"},
+                        "value": "25",
+                        "action_id": "rate_meal_25"
+                    }
+                ]
+            }
+        ]
+
+        send_slack_message({
+            "channel": user_id,
+            "text": f"Jak ti dnes chutnalo {meal_desc}?",
+            "blocks": blocks
+        })
+        ratings_sent += 1
+
+    app.logger.info(f"Rating requests sent to {ratings_sent} users.")
+    return f"Rating requests sent to {ratings_sent} users.", 200
 
 @app.route('/slack/interactive', methods=['POST'])
 def slack_interactive_endpoint():
@@ -280,6 +602,41 @@ def slack_interactive_endpoint():
         if payload["view"]["callback_id"] == "feedback_submission":
             feedback_text = payload["view"]["state"]["values"]["feedback_block"]["feedback_input"]["value"]
             db.collection("feedback").add({ "text": feedback_text, "user_id": user_id, "submitted_at": firestore.SERVER_TIMESTAMP })
+
+            # Notify owner about new feedback
+            if OWNER_SLACK_ID:
+                notification_blocks = [
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": "💬 Nový feedback od uživatele!"
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Od:* <@{user_id}>\n*Feedback:*\n```{feedback_text}```"
+                        }
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"Zobrazit všechny: <{BASE_URL}/admin?secret={ADMIN_SECRET_KEY}|Admin panel>"
+                            }
+                        ]
+                    }
+                ]
+
+                send_slack_message({
+                    "channel": OWNER_SLACK_ID,
+                    "text": f"Nový feedback od {user_id}: {feedback_text}",
+                    "blocks": notification_blocks
+                })
+
             return ("", 200)
 
         if payload["view"]["callback_id"] == "order_submission":
@@ -297,7 +654,25 @@ def slack_interactive_endpoint():
         trigger_id = payload.get("trigger_id")
         action_id = payload["actions"][0].get("action_id")
 
-        if action_id == "check_balance":
+        # Handle rating submissions
+        if action_id.startswith("rate_meal_"):
+            rating_value = int(action_id.split("_")[-1])
+
+            # Save the rating
+            if save_rating(user_id, today, rating_value):
+                # Get reaction message based on rating
+                reactions = {
+                    100: ["Paráda! Těším se, že si to dáš znovu! 🌟", "Skvělá volba! 💯", "To je radost! 😋"],
+                    75: ["Super! 👍", "Dobrá volba! 😊", "Jsem rád/a! ✨"],
+                    50: ["Ujde to. Příště to bude lepší! 🤞", "No jo... 😐", "Snad příště víc! 🤷"],
+                    25: ["Škoda... Příště zkus něco jiného! 😔", "To nebylo ono, co? 😕", "Díky za zpětnou vazbu! 🙏"]
+                }
+                reaction = random.choice(reactions.get(rating_value, reactions[75]))
+                send_ephemeral_slack_message(channel_id, user_id, f"Díky za hodnocení! {reaction}")
+            else:
+                send_ephemeral_slack_message(channel_id, user_id, "Hmm, nemohl jsem uložit hodnocení. 😕")
+
+        elif action_id == "check_balance":
             year, month = today.year, today.month
             workdays = calculate_workdays(year, month)
             total_budget = workdays * 125
