@@ -433,15 +433,35 @@ def send_ephemeral_slack_message(channel_id, user_id, text, blocks=None):
     except Exception as e: app.logger.error(f"Error in send_ephemeral_slack_message: {e}", exc_info=True)
 
 def is_valid_image_url(url):
-    """Check if URL is valid and potentially accessible"""
+    """Check if URL is valid and actually accessible by making a HEAD request"""
     if not url:
         return False
     if not url.startswith(('http://', 'https://')):
         return False
-    # Avoid obviously broken URLs
     if len(url) < 10:
         return False
-    return True
+
+    # Actually test if the image is downloadable
+    try:
+        response = requests.head(url, timeout=5, allow_redirects=True)
+
+        # Check if request was successful
+        if response.status_code != 200:
+            app.logger.warning(f"Image URL returned status {response.status_code}: {url}")
+            return False
+
+        # Check Content-Type is an image
+        content_type = response.headers.get('Content-Type', '').lower()
+        if not any(img_type in content_type for img_type in ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/jpg']):
+            app.logger.warning(f"Image URL has wrong Content-Type '{content_type}': {url}")
+            return False
+
+        app.logger.info(f"[DEBUG] Validated image URL successfully: {url}")
+        return True
+
+    except Exception as e:
+        app.logger.warning(f"Failed to validate image URL {url}: {e}")
+        return False
 
 def build_reminder_message_blocks(menu_items, user_id=None):
     settings_url = f"{BASE_URL}/settings"
