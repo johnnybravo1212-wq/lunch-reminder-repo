@@ -216,6 +216,7 @@ def get_saved_menu_for_date(target_date):
 
 def get_daily_menu(target_date):
     try:
+        app.logger.info(f"[DEBUG] Fetching menu for {target_date.strftime('%Y-%m-%d')}")
         response = requests.get(LUNCHDRIVE_URL, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.content, 'lxml')
@@ -229,15 +230,20 @@ def get_daily_menu(target_date):
         dish_names = [cols[2].get_text(strip=True) for row in menu_table.find_all('tr') if len(cols := row.find_all('td')) == 4 and (match := re.search(r'\d+', cols[3].get_text(strip=True))) and int(match.group(0)) == TARGET_PRICE]
         if not dish_names: return f"Na {target_date.strftime('%d.%m.')} bohužel není v nabídce žádné jídlo za {TARGET_PRICE} Kč."
 
+        app.logger.info(f"[DEBUG] Found {len(dish_names)} dishes: {dish_names}")
+
         # Fetch images for each dish
         menu_items = []
         for dish_name in dish_names:
+            app.logger.info(f"[DEBUG] Searching image for: {dish_name}")
             image_url = get_or_cache_dish_image(dish_name)
+            app.logger.info(f"[DEBUG] Image URL result: {image_url}")
             menu_items.append({
                 'name': dish_name,
                 'image_url': image_url
             })
 
+        app.logger.info(f"[DEBUG] Final menu_items: {menu_items}")
         return menu_items
     except Exception as e:
         app.logger.error(f"CRITICAL ERROR in get_daily_menu: {e}", exc_info=True)
@@ -473,13 +479,16 @@ def trigger_daily_reminder():
     if today.weekday() not in [0, 1, 2, 3, 6]: return "Not a reminder day (Fri/Sat).", 200
 
     next_day = today + timedelta(days=3) if today.weekday() == 4 else today + timedelta(days=1)
-    
+
     # --- ZMĚNA: Kontrola svátků ---
     if next_day in cz_holidays:
         app.logger.info(f"Next day {next_day} is a public holiday. No reminders will be sent.")
         return f"Next day ({next_day}) is a public holiday.", 200
 
-    menu_items = get_saved_menu_for_date(next_day) or get_daily_menu(next_day)
+    # TEMPORARY: Force fresh menu fetch for testing (ignore cache)
+    app.logger.info(f"[DEBUG] Forcing fresh menu fetch, ignoring cache")
+    menu_items = get_daily_menu(next_day)
+    # menu_items = get_saved_menu_for_date(next_day) or get_daily_menu(next_day)
     if isinstance(menu_items, str):
         app.logger.error(f"Could not get menu: {menu_items}")
         return menu_items, 500
