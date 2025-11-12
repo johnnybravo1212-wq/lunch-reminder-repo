@@ -26,4 +26,7 @@ slack-sdk==3.27.0
 # A robust HTML and XML parser
 lxml==5.2.2
 
+# DuckDuckGo search for fetching food images without API keys
+duckduckgo-search==5.3.0
+
 
