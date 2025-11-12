@@ -189,8 +189,15 @@ def save_rating(user_id, order_date, rating_value):
 def get_orders_needing_ratings(target_date):
     """Get all orders for a specific date that haven't been rated yet"""
     try:
-        query = db.collection('orders').where('order_for_date', '==', target_date.strftime("%Y-%m-%d")).where('rating', '==', None)
-        return list(query.stream())
+        # Get all orders for target date
+        query = db.collection('orders').where('order_for_date', '==', target_date.strftime("%Y-%m-%d"))
+        orders = list(query.stream())
+
+        # Filter for unrated orders (rating is None, empty string, or missing)
+        unrated = [order for order in orders if not order.to_dict().get('rating')]
+
+        app.logger.info(f"[DEBUG] Found {len(orders)} total orders for {target_date}, {len(unrated)} need ratings")
+        return unrated
     except Exception as e:
         app.logger.error(f"Error getting orders needing ratings: {e}")
         return []
