@@ -305,8 +305,10 @@ def search_food_image_google(dish_name):
             'cx': GOOGLE_CSE_ID,
             'q': search_query,
             'searchType': 'image',
-            'num': 1,
-            'safe': 'active'
+            'num': 3,  # Get 3 results to have fallback options
+            'safe': 'active',
+            'imgType': 'photo',  # Only photos, not clipart
+            'fileType': 'jpg,png'  # Only common image formats
         }
 
         response = requests.get(url, params=params, timeout=10)
@@ -314,11 +316,21 @@ def search_food_image_google(dish_name):
         data = response.json()
 
         if 'items' in data and len(data['items']) > 0:
-            image_url = data['items'][0].get('link')
-            app.logger.info(f"Found image (Google) for '{dish_name}': {image_url}")
-            return image_url
+            # Try to find a valid image URL from results
+            for item in data['items']:
+                image_url = item.get('link')
+                # Check if URL is valid and is actually an image
+                if is_valid_image_url(image_url) and any(image_url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
+                    app.logger.info(f"Found image (Google) for '{dish_name}': {image_url}")
+                    return image_url
+                else:
+                    app.logger.warning(f"Skipping invalid Google result: {image_url}")
+
+            # If no valid URL found, return None
+            app.logger.warning(f"No valid image found (Google) for '{dish_name}'")
+            return None
         else:
-            app.logger.warning(f"No image found (Google) for '{dish_name}'")
+            app.logger.warning(f"No image results (Google) for '{dish_name}'")
             return None
 
     except Exception as e:
@@ -420,6 +432,17 @@ def send_ephemeral_slack_message(channel_id, user_id, text, blocks=None):
     try: requests.post("https://slack.com/api/chat.postEphemeral", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}).raise_for_status()
     except Exception as e: app.logger.error(f"Error in send_ephemeral_slack_message: {e}", exc_info=True)
 
+def is_valid_image_url(url):
+    """Check if URL is valid and potentially accessible"""
+    if not url:
+        return False
+    if not url.startswith(('http://', 'https://')):
+        return False
+    # Avoid obviously broken URLs
+    if len(url) < 10:
+        return False
+    return True
+
 def build_reminder_message_blocks(menu_items, user_id=None):
     settings_url = f"{BASE_URL}/settings"
 
@@ -450,13 +473,19 @@ def build_reminder_message_blocks(menu_items, user_id=None):
             "text": {"type": "mrkdwn", "text": dish_text}
         })
 
-        # Add image if available
-        if image_url:
-            blocks.append({
-                "type": "image",
-                "image_url": image_url,
-                "alt_text": dish_name
-            })
+        # Add image ONLY if URL is valid and accessible
+        if image_url and is_valid_image_url(image_url):
+            try:
+                blocks.append({
+                    "type": "image",
+                    "image_url": image_url,
+                    "alt_text": dish_name
+                })
+                app.logger.info(f"[DEBUG] Added image for '{dish_name}': {image_url}")
+            except Exception as e:
+                app.logger.warning(f"Failed to add image block for '{dish_name}': {e}")
+        else:
+            app.logger.warning(f"[DEBUG] Skipping invalid image URL for '{dish_name}': {image_url}")
 
     # Add Pepe image and rest of the message
     blocks.extend([
