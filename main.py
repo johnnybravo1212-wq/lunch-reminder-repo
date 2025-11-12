@@ -44,7 +44,8 @@ ADMIN_SECRET_KEY = os.environ.get("ADMIN_SECRET_KEY")
 OWNER_SLACK_ID = os.environ.get("OWNER_SLACK_ID")  # Your Slack user ID for feedback notifications
 GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID")  # Google Custom Search Engine ID
 GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY")  # Google API Key
-USE_GOOGLE_SEARCH = os.environ.get("USE_GOOGLE_SEARCH", "false").lower() == "true"  # Toggle between DuckDuckGo and Google
+UNSPLASH_ACCESS_KEY = os.environ.get("UNSPLASH_ACCESS_KEY")  # Unsplash Access Key
+IMAGE_SEARCH_PROVIDER = os.environ.get("IMAGE_SEARCH_PROVIDER", "unsplash").lower()  # unsplash, google, or duckduckgo
 
 # --- EMOJIS & IMAGES ---
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️", "🐸"]
@@ -286,6 +287,60 @@ def clean_dish_name_for_search(dish_name):
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned
 
+def search_food_image_unsplash(dish_name):
+    """Search Unsplash for food image and return first result URL"""
+    try:
+        if not UNSPLASH_ACCESS_KEY:
+            app.logger.error("Unsplash not configured (missing ACCESS_KEY)")
+            return None
+
+        # Clean dish name before searching
+        cleaned_name = clean_dish_name_for_search(dish_name)
+
+        # Build search query - just the dish name + "food"
+        search_query = f"{cleaned_name} food"
+        app.logger.info(f"[DEBUG] Unsplash search query: '{dish_name}' → '{search_query}'")
+
+        url = "https://api.unsplash.com/search/photos"
+
+        params = {
+            'query': search_query,
+            'per_page': 3,  # Get 3 results for fallback
+            'orientation': 'landscape',
+            'content_filter': 'high'  # Family-friendly content
+        }
+
+        headers = {
+            'Authorization': f'Client-ID {UNSPLASH_ACCESS_KEY}'
+        }
+
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+
+        if 'results' in data and len(data['results']) > 0:
+            # Try to find a valid image URL from results
+            for photo in data['results']:
+                # Use "regular" size (good quality, not too large)
+                image_url = photo.get('urls', {}).get('regular')
+
+                if is_valid_image_url(image_url):
+                    app.logger.info(f"Found image (Unsplash) for '{dish_name}': {image_url}")
+                    return image_url
+                else:
+                    app.logger.warning(f"Skipping invalid Unsplash result: {image_url}")
+
+            # If no valid URL found, return None
+            app.logger.warning(f"No valid image found (Unsplash) for '{dish_name}'")
+            return None
+        else:
+            app.logger.warning(f"No image results (Unsplash) for '{dish_name}'")
+            return None
+
+    except Exception as e:
+        app.logger.error(f"Error searching Unsplash for image of '{dish_name}': {e}", exc_info=True)
+        return None
+
 def search_food_image_google(dish_name):
     """Search Google Custom Search for food image and return first result URL"""
     try:
@@ -370,10 +425,32 @@ def search_food_image_duckduckgo(dish_name):
         return None
 
 def search_food_image(dish_name):
-    """Search for food image using configured provider (Google or DuckDuckGo)"""
-    if USE_GOOGLE_SEARCH:
-        return search_food_image_google(dish_name)
-    else:
+    """Search for food image using configured provider with fallbacks"""
+    app.logger.info(f"[DEBUG] Using image search provider: {IMAGE_SEARCH_PROVIDER}")
+
+    # Try primary provider
+    if IMAGE_SEARCH_PROVIDER == "unsplash":
+        result = search_food_image_unsplash(dish_name)
+        if result:
+            return result
+        # Fallback to Google if Unsplash fails
+        app.logger.info(f"[DEBUG] Unsplash failed, trying Google fallback for '{dish_name}'")
+        result = search_food_image_google(dish_name)
+        if result:
+            return result
+        # Final fallback to DuckDuckGo
+        app.logger.info(f"[DEBUG] Google failed, trying DuckDuckGo fallback for '{dish_name}'")
+        return search_food_image_duckduckgo(dish_name)
+
+    elif IMAGE_SEARCH_PROVIDER == "google":
+        result = search_food_image_google(dish_name)
+        if result:
+            return result
+        # Fallback to Unsplash
+        app.logger.info(f"[DEBUG] Google failed, trying Unsplash fallback for '{dish_name}'")
+        return search_food_image_unsplash(dish_name)
+
+    else:  # duckduckgo
         return search_food_image_duckduckgo(dish_name)
 
 def get_or_cache_dish_image(dish_name):
@@ -443,23 +520,32 @@ def is_valid_image_url(url):
     if len(url) < 10:
         return False
 
-    # Blacklist domains that typically have menus/lists instead of food photos
-    blacklisted_domains = [
-        'lookaside.instagram.com',
-        'menu',
-        'jidelni',
-        'listek',
-        'damejidlo',
-        'wolt.com',
-        'bolt.eu',
-        'uber',
-        'lunchdrive'
+    # Whitelist trusted domains (skip blacklist check for these)
+    whitelisted_domains = [
+        'images.unsplash.com',
+        'unsplash.com'
     ]
 
     url_lower = url.lower()
-    if any(domain in url_lower for domain in blacklisted_domains):
-        app.logger.warning(f"Image URL from blacklisted domain: {url}")
-        return False
+    is_whitelisted = any(domain in url_lower for domain in whitelisted_domains)
+
+    # Blacklist domains that typically have menus/lists instead of food photos
+    if not is_whitelisted:
+        blacklisted_domains = [
+            'lookaside.instagram.com',
+            'menu',
+            'jidelni',
+            'listek',
+            'damejidlo',
+            'wolt.com',
+            'bolt.eu',
+            'uber',
+            'lunchdrive'
+        ]
+
+        if any(domain in url_lower for domain in blacklisted_domains):
+            app.logger.warning(f"Image URL from blacklisted domain: {url}")
+            return False
 
     # Actually test if the image is downloadable
     try:
