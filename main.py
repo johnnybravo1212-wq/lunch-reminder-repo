@@ -31,19 +31,6 @@ except Exception as e:
     app.logger.warning(f"Firebase already initialized or failed: {e}")
 db = firestore.client()
 
-# Initialize Google Translator
-translator = Translator()
-
-# Initialize Gemini AI
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    gemini_model = genai.GenerativeModel('gemini-1.5-flash')  # Fast & free model
-else:
-    gemini_model = None
-
-# --- ZMĚNA: Vytvoření instance českých svátků ---
-cz_holidays = holidays.CZ()
-
 # --- CONFIGURATION ---
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
@@ -59,7 +46,24 @@ GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY")  # Google API Key
 UNSPLASH_ACCESS_KEY = os.environ.get("UNSPLASH_ACCESS_KEY")  # Unsplash Access Key
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # Google Gemini API Key
 IMAGE_SEARCH_PROVIDER = os.environ.get("IMAGE_SEARCH_PROVIDER", "google").lower()  # unsplash, google, or duckduckgo
-USE_AI_VALIDATION = os.environ.get("USE_AI_VALIDATION", "true").lower() == "true"  # Use Gemini to validate images
+USE_AI_VALIDATION = os.environ.get("USE_AI_VALIDATION", "false").lower() == "true"  # Use Gemini to validate images
+ENABLE_IMAGES = os.environ.get("ENABLE_IMAGES", "false").lower() == "true"  # Enable/disable images completely
+
+# Initialize Google Translator
+translator = Translator()
+
+# Initialize Gemini AI (optional)
+gemini_model = None
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel('gemini-1.5-flash')
+        app.logger.info("Gemini AI initialized successfully")
+    except Exception as e:
+        app.logger.warning(f"Failed to initialize Gemini: {e}")
+
+# --- ZMĚNA: Vytvoření instance českých svátků ---
+cz_holidays = holidays.CZ()
 
 # --- EMOJIS & IMAGES ---
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️", "🐸"]
@@ -251,12 +255,16 @@ def get_daily_menu(target_date):
 
         app.logger.info(f"[DEBUG] Found {len(dish_names)} dishes: {dish_names}")
 
-        # Fetch images for each dish
+        # Fetch images for each dish (if enabled)
         menu_items = []
         for dish_name in dish_names:
-            app.logger.info(f"[DEBUG] Searching image for: {dish_name}")
-            image_url = get_or_cache_dish_image(dish_name)
-            app.logger.info(f"[DEBUG] Image URL result: {image_url}")
+            if ENABLE_IMAGES:
+                app.logger.info(f"[DEBUG] Searching image for: {dish_name}")
+                image_url = get_or_cache_dish_image(dish_name)
+                app.logger.info(f"[DEBUG] Image URL result: {image_url}")
+            else:
+                image_url = None
+
             menu_items.append({
                 'name': dish_name,
                 'image_url': image_url
