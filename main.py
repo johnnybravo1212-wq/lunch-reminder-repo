@@ -274,6 +274,18 @@ def get_slack_id_from_email(email):
         app.logger.error(f"Failed to lookup user by email {email}: {e}")
     return None
 
+def clean_dish_name_for_search(dish_name):
+    """Clean dish name: remove allergens, grams, and other noise"""
+    # Remove allergen numbers in parentheses: (1 3 4 7 10)
+    cleaned = re.sub(r'\([0-9\s]+\)', '', dish_name)
+    # Remove grams: 250g, 250 g, etc.
+    cleaned = re.sub(r'\d+\s*g\b', '', cleaned)
+    # Remove ml: 250ml, 250 ml, etc.
+    cleaned = re.sub(r'\d+\s*ml\b', '', cleaned)
+    # Remove extra whitespace
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
 def search_food_image_google(dish_name):
     """Search Google Custom Search for food image and return first result URL"""
     try:
@@ -281,7 +293,11 @@ def search_food_image_google(dish_name):
             app.logger.error("Google Custom Search not configured (missing CSE_ID or API_KEY)")
             return None
 
-        search_query = f"{dish_name} jídlo food"
+        # Clean dish name before searching
+        cleaned_name = clean_dish_name_for_search(dish_name)
+        search_query = f"{cleaned_name} jídlo food"
+        app.logger.info(f"[DEBUG] Cleaned search query: '{dish_name}' → '{search_query}'")
+
         url = "https://www.googleapis.com/customsearch/v1"
 
         params = {
@@ -385,8 +401,18 @@ def get_or_cache_dish_image(dish_name):
 # --- SLACK API & MESSAGE BUILDING ---
 
 def send_slack_message(payload):
-    try: requests.post("https://slack.com/api/chat.postMessage", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'}).raise_for_status()
-    except Exception as e: app.logger.error(f"Error in send_slack_message: {e}", exc_info=True)
+    try:
+        app.logger.info(f"[DEBUG] Sending Slack message to channel: {payload.get('channel')}")
+        response = requests.post("https://slack.com/api/chat.postMessage", json=payload, headers={'Authorization': f'Bearer {SLACK_BOT_TOKEN}'})
+        response.raise_for_status()
+        response_data = response.json()
+
+        if not response_data.get('ok'):
+            app.logger.error(f"Slack API error: {response_data.get('error')} - {response_data}")
+        else:
+            app.logger.info(f"[DEBUG] Slack message sent successfully to {payload.get('channel')}")
+    except Exception as e:
+        app.logger.error(f"Error in send_slack_message: {e}", exc_info=True)
 
 def send_ephemeral_slack_message(channel_id, user_id, text, blocks=None):
     payload = {"channel": channel_id, "user": user_id, "text": text}
@@ -545,29 +571,55 @@ def trigger_daily_reminder():
     save_daily_menu(next_day, menu_items)
     
     all_users = get_all_users_with_settings()
-    if not all_users: return "No users found.", 200
+    if not all_users:
+        app.logger.warning("No users found in database!")
+        return "No users found.", 200
+
+    app.logger.info(f"[DEBUG] Found {len(all_users)} total users in database")
+    app.logger.info(f"[DEBUG] Current hour Prague: {current_hour_prague}")
 
     users_reminded = 0
+    users_skipped = 0
 
     for user_id, data in all_users.items():
         user_data, settings = data['user_data'], data['settings']
-        if check_if_user_ordered_for_date(user_id, next_day) or is_user_snoozed(user_data, next_day): continue
+
+        # Check skip conditions
+        already_ordered = check_if_user_ordered_for_date(user_id, next_day)
+        is_snoozed = is_user_snoozed(user_data, next_day)
+
+        if already_ordered:
+            app.logger.info(f"[DEBUG] Skipping {user_id}: already ordered")
+            users_skipped += 1
+            continue
+        if is_snoozed:
+            app.logger.info(f"[DEBUG] Skipping {user_id}: snoozed")
+            users_skipped += 1
+            continue
+
         send_now = False
         if settings.get('is_test_user'):
             send_now = True
-            app.logger.info(f"Sending to TEST USER {user_id} because test mode is ON.")
+            app.logger.info(f"[DEBUG] Sending to TEST USER {user_id} because test mode is ON.")
         else:
             freq = settings.get('notification_frequency', 'daily')
             if 9 <= current_hour_prague < 17:
                 if freq == '2' and (current_hour_prague - 9) % 2 == 0: send_now = True
                 elif freq == '4' and (current_hour_prague - 9) % 4 == 0: send_now = True
                 elif freq == 'daily' and 11 <= current_hour_prague < 13: send_now = True
+
+            if not send_now:
+                app.logger.info(f"[DEBUG] Skipping {user_id}: not their time (freq={freq}, hour={current_hour_prague})")
+                users_skipped += 1
+
         if send_now:
+            app.logger.info(f"[DEBUG] Preparing message for user {user_id}")
             # Build personalized message blocks for each user
             message_blocks = build_reminder_message_blocks(menu_items, user_id=user_id)
-            send_slack_message({"channel": user_id, "blocks": message_blocks})
+            send_slack_message({"channel": user_id, "blocks": message_blocks, "text": "Zítřejší menu"})
             users_reminded += 1
-    app.logger.info(f"Job finished. Dynamic reminders sent to {users_reminded} users.")
+
+    app.logger.info(f"Job finished. Dynamic reminders sent to {users_reminded} users, skipped {users_skipped} users.")
     return f"Dynamic reminders sent to {users_reminded} users.", 200
 
 @app.route('/send-rating-requests', methods=['POST'])
@@ -836,6 +888,3 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
     load_dotenv()
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
-
-
-
