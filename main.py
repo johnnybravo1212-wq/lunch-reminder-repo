@@ -295,7 +295,9 @@ def search_food_image_google(dish_name):
 
         # Clean dish name before searching
         cleaned_name = clean_dish_name_for_search(dish_name)
-        search_query = f"{cleaned_name} jídlo food"
+
+        # Build better search query - focus on dish photos, exclude menus
+        search_query = f"{cleaned_name} recipe dish food -menu -jídelní -lístek -restaurace"
         app.logger.info(f"[DEBUG] Cleaned search query: '{dish_name}' → '{search_query}'")
 
         url = "https://www.googleapis.com/customsearch/v1"
@@ -439,6 +441,24 @@ def is_valid_image_url(url):
     if not url.startswith(('http://', 'https://')):
         return False
     if len(url) < 10:
+        return False
+
+    # Blacklist domains that typically have menus/lists instead of food photos
+    blacklisted_domains = [
+        'lookaside.instagram.com',
+        'menu',
+        'jidelni',
+        'listek',
+        'damejidlo',
+        'wolt.com',
+        'bolt.eu',
+        'uber',
+        'lunchdrive'
+    ]
+
+    url_lower = url.lower()
+    if any(domain in url_lower for domain in blacklisted_domains):
+        app.logger.warning(f"Image URL from blacklisted domain: {url}")
         return False
 
     # Actually test if the image is downloadable
