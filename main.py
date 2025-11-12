@@ -16,6 +16,7 @@ from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify, render_template, render_template_string, abort, redirect, url_for
 from duckduckgo_search import DDGS
 from googletrans import Translator
+import google.generativeai as genai
 
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
@@ -33,6 +34,13 @@ db = firestore.client()
 # Initialize Google Translator
 translator = Translator()
 
+# Initialize Gemini AI
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    gemini_model = genai.GenerativeModel('gemini-1.5-flash')  # Fast & free model
+else:
+    gemini_model = None
+
 # --- ZMĚNA: Vytvoření instance českých svátků ---
 cz_holidays = holidays.CZ()
 
@@ -49,7 +57,9 @@ OWNER_SLACK_ID = os.environ.get("OWNER_SLACK_ID")  # Your Slack user ID for feed
 GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID")  # Google Custom Search Engine ID
 GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY")  # Google API Key
 UNSPLASH_ACCESS_KEY = os.environ.get("UNSPLASH_ACCESS_KEY")  # Unsplash Access Key
-IMAGE_SEARCH_PROVIDER = os.environ.get("IMAGE_SEARCH_PROVIDER", "unsplash").lower()  # unsplash, google, or duckduckgo
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")  # Google Gemini API Key
+IMAGE_SEARCH_PROVIDER = os.environ.get("IMAGE_SEARCH_PROVIDER", "google").lower()  # unsplash, google, or duckduckgo
+USE_AI_VALIDATION = os.environ.get("USE_AI_VALIDATION", "true").lower() == "true"  # Use Gemini to validate images
 
 # --- EMOJIS & IMAGES ---
 URGENT_EMOJIS = ["🚨", "🔥", "⏰", "🍔", "🏃‍♂️", "💨", "‼️", "🐸"]
@@ -291,6 +301,69 @@ def clean_dish_name_for_search(dish_name):
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     return cleaned
 
+def validate_image_with_ai(image_url, dish_name):
+    """Use Gemini Vision to validate if image matches the dish"""
+    if not USE_AI_VALIDATION or not gemini_model:
+        return True  # Skip validation if disabled
+
+    try:
+        # Download image to validate
+        response = requests.get(image_url, timeout=5)
+        if response.status_code != 200:
+            return False
+
+        # Prepare prompt for Gemini
+        prompt = f"""Look at this image. Is this a realistic photo of "{dish_name}" food/meal?
+
+Answer ONLY with a JSON object:
+{{
+  "is_match": true/false,
+  "is_realistic": true/false,
+  "confidence": 0-100,
+  "reason": "brief explanation"
+}}
+
+Criteria:
+- is_match: Does the image show {dish_name}?
+- is_realistic: Is it a realistic photo (not artistic/illustration/menu)?
+- confidence: How confident are you (0-100)?
+
+Answer:"""
+
+        # Call Gemini Vision
+        image_data = response.content
+        result = gemini_model.generate_content([prompt, {"mime_type": "image/jpeg", "data": image_data}])
+
+        # Parse response
+        response_text = result.text.strip()
+        app.logger.info(f"[DEBUG] Gemini validation for '{dish_name}': {response_text}")
+
+        # Try to parse JSON response
+        import json
+        try:
+            # Extract JSON from response (might have markdown code blocks)
+            if "```json" in response_text:
+                response_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                response_text = response_text.split("```")[1].split("```")[0].strip()
+
+            validation = json.loads(response_text)
+
+            # Accept image if it's realistic and somewhat matches
+            is_acceptable = validation.get('is_realistic', False) and validation.get('confidence', 0) > 40
+
+            app.logger.info(f"[DEBUG] AI validation result: {is_acceptable} (confidence: {validation.get('confidence')}%)")
+            return is_acceptable
+
+        except:
+            # If parsing fails, accept the image (fallback)
+            app.logger.warning(f"Failed to parse Gemini response, accepting image by default")
+            return True
+
+    except Exception as e:
+        app.logger.error(f"AI validation failed for '{dish_name}': {e}")
+        return True  # Accept on error (fallback)
+
 def translate_to_english(text):
     """Translate Czech text to English using Google Translate"""
     try:
@@ -325,8 +398,8 @@ def search_food_image_unsplash(dish_name):
         # Translate to English for better Unsplash results
         english_name = translate_to_english(cleaned_name)
 
-        # Build search query - translated dish name + "food dish"
-        search_query = f"{english_name} food dish"
+        # Build search query - focus on restaurant/meal style photos
+        search_query = f"{english_name} meal restaurant"
         app.logger.info(f"[DEBUG] Unsplash search query: '{dish_name}' → '{cleaned_name}' → '{english_name}' → '{search_query}'")
 
         url = "https://api.unsplash.com/search/photos"
@@ -349,8 +422,8 @@ def search_food_image_unsplash(dish_name):
         if 'results' in data and len(data['results']) > 0:
             # Try to find a valid image URL from results
             for photo in data['results']:
-                # Use "regular" size (good quality, not too large)
-                image_url = photo.get('urls', {}).get('regular')
+                # Use "small" size (400px width - perfect for Slack, faster loading)
+                image_url = photo.get('urls', {}).get('small')
 
                 if is_valid_image_url(image_url):
                     app.logger.info(f"Found image (Unsplash) for '{dish_name}': {image_url}")
@@ -406,8 +479,15 @@ def search_food_image_google(dish_name):
                 image_url = item.get('link')
                 # Check if URL is valid and is actually an image
                 if is_valid_image_url(image_url) and any(image_url.lower().endswith(ext) for ext in ['.jpg', '.jpeg', '.png', '.gif', '.webp']):
-                    app.logger.info(f"Found image (Google) for '{dish_name}': {image_url}")
-                    return image_url
+                    # Validate with AI if enabled
+                    if USE_AI_VALIDATION and validate_image_with_ai(image_url, dish_name):
+                        app.logger.info(f"Found AI-validated image (Google) for '{dish_name}': {image_url}")
+                        return image_url
+                    elif not USE_AI_VALIDATION:
+                        app.logger.info(f"Found image (Google) for '{dish_name}': {image_url}")
+                        return image_url
+                    else:
+                        app.logger.warning(f"AI rejected Google image: {image_url}")
                 else:
                     app.logger.warning(f"Skipping invalid Google result: {image_url}")
 
