@@ -32,3 +32,6 @@ duckduckgo-search==4.4.3
 
 # Google Translate for translating Czech dish names to English
 googletrans==4.0.0rc1
+
+# Google Gemini AI for image validation
+google-generativeai
