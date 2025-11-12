@@ -1,3 +1,4 @@
+# Updated 2025-11-12 - Added DuckDuckGo image search
 holidays
 # Flask is our web framework
 Flask==3.0.3
@@ -27,6 +28,6 @@ slack-sdk==3.27.0
 lxml==5.2.2
 
 # DuckDuckGo search for fetching food images without API keys
-duckduckgo-search==5.3.0
+duckduckgo-search==4.4.3
 
 
