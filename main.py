@@ -467,13 +467,17 @@ def get_or_cache_dish_image(dish_name):
         if cache_doc.exists:
             cached_data = cache_doc.to_dict()
             image_url = cached_data.get('image_url')
-            app.logger.info(f"Using cached image for '{dish_name}'")
+            app.logger.info(f"[DEBUG] Using cached image for '{dish_name}': {image_url}")
             return image_url
+        else:
+            app.logger.info(f"[DEBUG] No cache found for '{dish_name}', will search now")
     except Exception as e:
         app.logger.error(f"Error reading image cache for '{dish_name}': {e}")
 
     # Not in cache, search for it
+    app.logger.info(f"[DEBUG] Starting image search for '{dish_name}'")
     image_url = search_food_image(dish_name)
+    app.logger.info(f"[DEBUG] Image search result for '{dish_name}': {image_url}")
 
     # Cache the result (even if None, to avoid repeated failed searches)
     if image_url:
