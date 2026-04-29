@@ -750,6 +750,9 @@ def build_reminder_message_blocks(menu_items, user_id=None):
             {"type": "button", "text": {"type": "plain_text", "text": "✅ Mám objednáno"}, "action_id": "open_order_modal"},
             {"type": "button", "text": {"type": "plain_text", "text": "Dnes neobjednávám"}, "style": "danger", "action_id": "snooze_today"},
         ]},
+        {"type": "context", "elements": [
+            {"type": "mrkdwn", "text": f"💻 Na PC? Objednej na <{LUNCHDRIVE_URL}|webu LunchDrive>"}
+        ]},
         {"type": "actions", "elements": [
             {"type": "button", "text": {"type": "plain_text", "text": "💰 Kolik zbývá?"}, "action_id": "check_balance"},
             {"type": "button", "text": {"type": "plain_text", "text": "Chybí ti funkce?"}, "action_id": "open_feedback_modal"}
