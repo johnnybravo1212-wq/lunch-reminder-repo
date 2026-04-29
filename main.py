@@ -750,7 +750,7 @@ def build_reminder_message_blocks(menu_items, user_id=None):
             "text": {
                 "type": "mrkdwn",
                 "text": (
-                    f"🍽️  *<{BASE_URL}/open-lunchdrive|Objednat v aplikaci LunchDrive>*\n"
+                    f"🍽️  *<lunchdrive://open|Objednat v aplikaci LunchDrive>*\n"
                     f"🧪  *<{BASE_URL}/deeplink-lab|Deeplink Lab (test all variants)>*"
                 ),
             },
