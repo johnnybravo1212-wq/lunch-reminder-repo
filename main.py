@@ -745,8 +745,26 @@ def build_reminder_message_blocks(menu_items, user_id=None):
         {"type": "divider"},
         {"type": "image", "image_url": random.choice(PEPE_IMAGES), "alt_text": "A wild Pepe appears"},
         {"type": "divider"},
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": (
+                    f"🍽️  *<{BASE_URL}/open-lunchdrive|Objednat v aplikaci LunchDrive>*\n"
+                    f"🧪  *<{BASE_URL}/deeplink-lab|Deeplink Lab (test all variants)>*"
+                ),
+            },
+        },
+        {
+            "type": "context",
+            "elements": [
+                {
+                    "type": "mrkdwn",
+                    "text": "Tip: v Deeplink Lab klepni na tlačítka A–G a najdi to, které otevře LunchDrive.",
+                }
+            ],
+        },
         {"type": "actions", "elements": [
-            {"type": "button", "text": {"type": "plain_text", "text": "🍽️ Objednat v LunchDrive"}, "style": "primary", "url": f"{BASE_URL}/open-lunchdrive", "action_id": "open_lunchdrive_app"},
             {"type": "button", "text": {"type": "plain_text", "text": "✅ Mám objednáno"}, "action_id": "open_order_modal"},
             {"type": "button", "text": {"type": "plain_text", "text": "Dnes neobjednávám"}, "style": "danger", "action_id": "snooze_today"},
         ]},
