@@ -1156,6 +1156,68 @@ def open_lunchdrive():
     html = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>Otevřít LunchDrive…</title><style>body{font-family:system-ui,sans-serif;margin:0;padding:1.5rem;text-align:center;background-color:#f5f5f5;}.container{max-width:400px;margin:2rem auto;background:#fff;padding:2rem;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);}h3{font-size:1.5rem;margin-top:0;}p{color:#555;}.button{display:inline-block;padding:0.8rem 1.5rem;margin:0.5rem 0.25rem;background-color:#007aff;color:white;text-decoration:none;border-radius:8px;font-weight:600;}.button.secondary{background-color:#6c757d;}.note{font-size:0.9em;color:#888;margin-top:2rem;}</style><script>(function(){var u=navigator.userAgent||"",isAndroid=/android/i.test(u),isIOS=/iphone|ipad|ipod/i.test(u),t0=Date.now(),playStore="https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en",appStore="https://apps.apple.com/cz/app/lunchdrive/id1496245341",pkg="cz.trueapps.lunchdrive",iosScheme="lunchdrive://open",androidIntent="intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package="+pkg+";S.browser_fallback_url="+encodeURIComponent(playStore)+";end";function go(url){try{window.location.href=url}catch(e){}}window.addEventListener("DOMContentLoaded",function(){var manual=document.getElementById("manual");if(isAndroid){manual.href=androidIntent;go(androidIntent);setTimeout(function(){if(Date.now()-t0<2500&&document.visibilityState==="visible")go(playStore)},2500)}else if(isIOS){manual.href=iosScheme;go(iosScheme);setTimeout(function(){if(Date.now()-t0<2500&&document.visibilityState==="visible")go(appStore)},2000)}else{go(playStore)}});</script></head><body><div class="container"><h3>Pokouším se otevřít aplikaci LunchDrive…</h3><p>Pokud se aplikace neotevřela automaticky, klepni na tlačítko níže.</p><a id="manual" href="#" class="button">📱 Otevřít LunchDrive</a><br><a href="https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive&hl=en" class="button secondary">Otevřít v Play Store</a><p class="note"><b>Tip:</b> Ve Slacku klikněte na tři tečky (⋮) vpravo nahoře a zvolte "Otevřít v systémovém prohlížeči".</p></div></body></html>"""
     return render_template_string(html)
 
+@app.route("/deeplink-lab")
+def deeplink_lab():
+    html = """<!doctype html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<title>Deeplink Lab</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:0;padding:1rem;background:#f5f5f5;color:#222;}
+.box{max-width:560px;margin:1rem auto;background:#fff;padding:1.25rem;border-radius:10px;box-shadow:0 2px 8px rgba(0,0,0,0.08);}
+h2{margin-top:0;font-size:1.2rem;}
+.row{display:flex;flex-wrap:wrap;gap:0.5rem;margin:0.5rem 0;}
+.btn{flex:1 1 auto;display:block;padding:0.75rem 0.5rem;background:#007aff;color:#fff;text-decoration:none;border-radius:8px;font-weight:600;text-align:center;font-size:0.9rem;border:0;cursor:pointer;}
+.btn.alt{background:#34c759;}
+.btn.warn{background:#ff9500;}
+.btn.gray{background:#6c757d;}
+.label{font-size:0.78rem;color:#555;margin:0.5rem 0 0.15rem;font-family:monospace;word-break:break-all;}
+input[type=text]{width:100%;padding:0.6rem;border:1px solid #ccc;border-radius:6px;font-family:monospace;font-size:0.85rem;box-sizing:border-box;}
+.ua{font-size:0.7rem;color:#888;font-family:monospace;word-break:break-all;margin-top:1rem;}
+</style>
+</head>
+<body>
+<div class="box">
+  <h2>🧪 LunchDrive Deeplink Lab</h2>
+  <p style="font-size:0.9rem;color:#555;">Tap each button. Whichever one opens the LunchDrive app — that's our answer.</p>
+
+  <div class="label">A: lunchdrive://open (iOS-style scheme)</div>
+  <a class="btn" href="lunchdrive://open">A — lunchdrive://open</a>
+
+  <div class="label">B: lunchdrive:// (no path)</div>
+  <a class="btn" href="lunchdrive://">B — lunchdrive://</a>
+
+  <div class="label">C: intent://#Intent;package=...;end (package only)</div>
+  <a class="btn alt" href="intent://#Intent;package=cz.trueapps.lunchdrive;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcz.trueapps.lunchdrive;end">C — intent package only</a>
+
+  <div class="label">D: intent: action=MAIN;category=LAUNCHER</div>
+  <a class="btn alt" href="intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;package=cz.trueapps.lunchdrive;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcz.trueapps.lunchdrive;end">D — intent MAIN/LAUNCHER</a>
+
+  <div class="label">E: intent with scheme=lunchdrive</div>
+  <a class="btn alt" href="intent://open#Intent;scheme=lunchdrive;package=cz.trueapps.lunchdrive;S.browser_fallback_url=https%3A%2F%2Fplay.google.com%2Fstore%2Fapps%2Fdetails%3Fid%3Dcz.trueapps.lunchdrive;end">E — intent scheme=lunchdrive</a>
+
+  <div class="label">F: https://lunchdrive.cz/cs/d/3792 (App Link test)</div>
+  <a class="btn warn" href="https://lunchdrive.cz/cs/d/3792">F — https lunchdrive.cz</a>
+
+  <div class="label">G: Play Store (sanity check — should always work)</div>
+  <a class="btn gray" href="https://play.google.com/store/apps/details?id=cz.trueapps.lunchdrive">G — Play Store</a>
+
+  <h2 style="margin-top:1.5rem;">Custom URL</h2>
+  <p style="font-size:0.85rem;color:#555;">Paste anything (intent://..., scheme://..., https://...) and tap Try.</p>
+  <input id="custom" type="text" placeholder="intent://...">
+  <div class="row" style="margin-top:0.5rem;">
+    <button class="btn" onclick="var v=document.getElementById('custom').value;if(v)window.location.href=v;">Try</button>
+  </div>
+
+  <div class="ua" id="ua"></div>
+</div>
+<script>document.getElementById("ua").textContent="UA: "+(navigator.userAgent||"");</script>
+</body>
+</html>"""
+    return render_template_string(html)
+
 @app.route('/admin', methods=['GET'])
 def admin_panel():
     if request.args.get('secret') != ADMIN_SECRET_KEY: abort(403)
